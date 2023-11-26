@@ -247,7 +247,7 @@ MOUWRK:	tst	PPUNOM
 26$:	cmp	MOUSEY, #173.-8.
 	ble	28$
 	mov	#173.-8., MOUSEY
-28$:	; write to CPU
+28$:	; write coords to CPU
 	mov	#CMOUSY, @#177010
 	mov	MOUSEY, @#177014
 	; click write only if it happens
