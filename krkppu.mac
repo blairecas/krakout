@@ -1,0 +1,1351 @@
+	.title	KRKPPU
+	.enabl	LC
+	.asect
+	.=10000
+
+START:	; set PSW (HP**TNZVC) = 110000000 (HP=11, disable interrupts), but we can't set H
+	mtps	#200
+
+	; set first 1k bytes, interrupts table and stack
+	; do not change @#270, #@272 (vlines table)
+	clr	R0
+	mov	#207, (R0)+	; 207 = return
+	clr	(R0)+
+	mov	#<270-4/4>, R3	; [4..266]
+	mov	#RTIADR, (R0)+	; [#RTIADR, 0] - all other interrupts
+	mov	#600, (R0)+
+	sob	R3, .-10
+	add	#4, R0
+	mov	#<1000-274/4>, R3 ; [274..776]
+	mov	#RTIADR, (R0)+
+	mov	#600, (R0)+
+	sob	R3, .-10
+	; clearing up to 2000 and set stack
+	mov	#<2000-1000/4>, R3 ; [1000..2000] - clearing
+	clr	(R0)+
+	sob	R3, .-2
+	mov	#2000, SP
+	; clear plane 0
+	mov	#100000, R0
+	mov	#26400, R5	; 55000(8) bytes
+	clr	(R0)+
+	sob	R5, .-2
+
+	; always put value into 177010 right before reading 177014
+	; even if 177010 are not changing
+	mov	#PPUYYY, @#177010	; wait for asking to start phase 3
+	cmp	#30, @#177014
+	bne	.-14
+        
+	; phase 3
+	call	MOUTST		; test for mouse presence
+
+	; set lines table (some crazy UKNC shit with lines table)
+	; idea here is to make plain ppu vram -> device projection
+	; also making all black&white because will use only plane 0
+	mov	#2000, R0
+	; YRGB YRGB YRGB YRGB for colors
+	; 011 010 001 000
+	; 111 110 101 100
+	; defaults are 135230, 177334
+	mov	#^B1111101011111000, (R0)+
+	mov	#^B1111101111111110, (R0)+
+	mov	#152140, (R0)+	;
+	mov	#2012, (R0)+	; 4 words, cursor and resolution
+	mov	#^B0000000000010000, (R0)+ ; no cursor
+	mov	#^B0000000000010111, (R0)+ ; 320x288, max luminance
+	mov	#152260, (R0)+
+	mov	#2026, (R0)+	; next are 4-word element
+
+	mov	#16., R5	; 2 rows are already set - so it's 16 here
+	mov	#152400, R1	;
+10$:	mov	R0, R2		;
+	add	#8., R2		; next addr +4 words
+	bis	#6, R2
+	mov	#^B1111101011111000, (R0)+
+	mov	#^B1111101111111110, (R0)+
+	mov	R1, (R0)+	; vram
+	mov	R2, (R0)+	; next addr
+	add	#80., R1	; next vram
+	sob	R5, 10$
+
+	mov	#270., R5	; 'main' lines array
+	mov	#100000, R1	;
+20$:	mov	R0, R2		;
+	add	#8., R2		; next addr +4 words
+	bis	#6, R2
+	mov	#^B1111101011111000, (R0)+
+	mov	#^B1111101111111110, (R0)+
+	mov	R1, (R0)+	;
+	mov	R2, (R0)+	;
+	add	#80., R1	;
+	sob	R5, 20$		;
+	
+	dec	R0		; cycle to beginning - do we need that?
+	dec	R0
+	mov	#2006, (R0)+
+
+	mov	#270, R0
+	clr	(R0)+
+	mov	#2006, (R0)
+
+	; array of lines addr
+	mov	#LINEAD, R0
+	mov	#100000, R1
+	mov	#288., R5	
+40$:	mov	R1, (R0)+
+	add	#80., R1
+	sob	R5, 40$
+	; clearing up to #10000 (ppu code start point)
+41$:	clr	(R0)+
+	cmp	R0, #10000
+	blo	41$
+
+INIT02:	; final preparations
+	call	CLEAUP		; cleanup upper RAM
+	bic	#107, @#177066	; turn off interrupt on CPU-PPU channels
+	; timers
+	bic	#^B0000001000000000, @#177054	; disallow vsync in PPU
+	bis	#^B0000000100000000, @#177054	; allow vsync in CPU
+	call	PPTINI		; init pp timer
+	bic	#200, @#177716	; turn off sound generator
+	; set interrupts
+	mov	#KEYBI,  @#300	; keyboard interrupt
+
+	; ackn start phase 3
+        mov	#PPUYYY, @#177010
+	mov	#03, @#177014
+	
+	mtps	#0		; allow interrupts
+
+; //////////////////////////////////////////////////////////////////////////////
+; // MAIN PPU CYCLE
+; //////////////////////////////////////////////////////////////////////////////
+
+MAINCY:	call	MOUWRK
+	call	MUSPRO
+	call	CMDPRO
+	br	MAINCY
+	
+CMDPRO:	mov	#CMDBUF, @#177010
+	tst	@#177014
+	bne	1$
+	return
+1$:	mov	#CMDBUF, CMDADR
+	inc	CMDADR	
+CMDPRC:	; check for overflow
+;	cmp	CMDADR, #CMDBUF
+;	bhis	.+6
+;	jmp	@#ERROR
+;	cmp	CMDADR, #PPUYYY
+;	blo	.+6
+;	jmp	@#ERROR
+	; command
+	mov	CMDADR, @#177010
+	mov	@#177014, R5
+	inc	CMDADR
+	tst	R5
+	bne	1$
+	; end of commands
+	mov	#CMDBUF, CMDADR
+	mov	CMDADR, @#177010
+	mov	#0, @#177014
+	return
+1$:	; get command procedure 
+	asl	R5
+	mov	CMDPAD(R5), R5
+	; get parameters (R0..R4) and run
+	mov	CMDADR, @#177010
+	mov	@#177014, R0
+	inc	CMDADR
+	mov	CMDADR, @#177010
+	mov	@#177014, R1
+	inc	CMDADR
+	mov	CMDADR, @#177010
+	mov	@#177014, R2
+	inc	CMDADR
+	mov	CMDADR, @#177010
+	mov	@#177014, R3
+	inc	CMDADR
+	mov	CMDADR, @#177010
+	mov	@#177014, R4
+	inc	CMDADR
+	call	(R5)
+	jmp	@#CMDPRC		; next command
+
+CMDPAD:	.WORD	000000 
+	.WORD	LOASPR	; 01 load and preshift, R0-ID, R1-addr in CPU
+	.WORD	CLRSC0	; 02 clear plane 0
+	.WORD	PRTDWO	; 03 print decimal word, R0-num, R1-x8, R2-y
+	.WORD	CLEAUP	; 04 cleanup upper RAM
+	.WORD	PRTDW2	; 05 print 00..99, R0-num, R1-x8, R2-y
+	.WORD	000000	; 06 empty
+	.WORD	SPRF16	; 07 put record to framebuffer as sprite 16x
+	.WORD	FBCLEA	; 08 clear framebuffer
+	.WORD	FBMOVR	; 09 move framebuffer
+	.WORD	BATDRW	; 10 draw the bat, R1-x, R2-y, R3-dy, R4-batmod
+	.WORD	SPRR16	; 11 draw sprite 16x, R0-ID, R1-x, R2-y
+	.WORD	SNDSTA	; 12 start sound, R0-ID
+	.WORD	MUSSTA	; 13 start music, R0-ID
+	.WORD	MUSNOT	; 14 change pp timer, R0-val
+	.WORD	MUSNST	; 15 play single note
+	.WORD	PALUPD	; 16 palette change, R0 - type
+	.WORD	REQRCN	; 17 request RTICNT value
+	.WORD	BATDR2	; 18 draw 'pong' bat
+	.WORD	PRCMUS	; 19 some procedural music
+	.word	SETMOU	; 20 set mouse Y coord
+	
+	
+; //////////////////////////////////////////////////////////////////////////////
+; // Procedures
+; //////////////////////////////////////////////////////////////////////////////
+
+; set mouse Y coord
+SETMOU:	mov	R2, MOUSEY
+	return
+
+; test for mouse presents
+MOUTST:	mov	@#4, -(SP)
+	mov	PC, R0
+	add	#NINT4-., R0
+	mov	R0, @#4
+	mtps	#0
+	tst	@#177400
+	mtps	#200
+	mov	(SP)+, @#4
+	mov	#CNOMOU, @#177010	; write it to cpu
+	mov	PPUNOM, @#177014
+	return
+
+NINT4:	inc	PPUNOM
+	rti
+
+; mouse processing
+MOUWRK:	tst	PPUNOM
+	bne	99$
+	mov	@#177400, R0
+	; [YYYYYYYLXXXXXXXR] signed 7-bit
+	mov	MOUBTN, R3		; R3 - old left button
+	clr	R2			; R2 - left button
+	; X and RMB
+	; movb	R0, R1
+	; asr	R1
+	; rol	R2
+	; add	R1, MOUX
+	; Y and LMB
+	swab	R0
+	movb	R0, R1
+	asr	R1
+	rol	R2
+	sub	R1, MOUSEY		; Y is inverted
+	mov	R2, MOUBTN
+	; check Y for out of screen
+	cmp	MOUSEY, #18.
+	bge	26$
+	mov	#18., MOUSEY
+	br	28$
+26$:	cmp	MOUSEY, #173.-8.
+	ble	28$
+	mov	#173.-8., MOUSEY
+28$:	; write to CPU
+	mov	#CMOUSY, @#177010
+	mov	MOUSEY, @#177014
+	; click write only if it happens
+	cmp	R2, R3
+	beq	99$
+	mov	#KEYSPC, @#177010
+	mov	MOUBTN, @#177014
+99$:	return
+
+
+; clean upper RAM
+CLEAUP:	mov	#END, R0
+	mov	#100000-END/2, R2
+	clr	(R0)+
+	sob	R2, .-2
+	return
+
+
+; allocate memory
+; R0 - ID
+; R1 - SIZE in words
+; -> R5 addr
+MALLOC:	mov	#END, R5
+1$:	tst	(R5)		; check for ID
+	beq	2$		; empty space
+	inc	R5		; next word - size
+	inc	R5		;
+	mov	(R5)+, R2
+	asl	R2
+	add	R2, R5		; to the next ID
+	br	1$
+2$:	mov	R0, (R5)+	; put ID
+	mov	R1, (R5)	; put SIZE
+	dec	R5
+	dec	R5
+	mov	R0, R1
+	asl	R1
+	add	#OBJADR, R1
+	mov	R5, (R1)	; store addr in object table
+	return
+
+
+; load and preshift sprite
+; R0 - ID
+; R1 - addr in CPU
+LOAS01: .WORD	0	; dx
+LOAS02: .WORD	0	; dy
+LOAS03:	.WORD	0	; DST size (words)
+LOAS04: .WORD	0	; addr in CPU / 2
+LOAS05: .WORD	0	; addr
+LOAS10:	.WORD	0	; SRC size (dx*dy)
+LOAS11:	.WORD	0	; DST size ((dx+1)*dy)
+;
+LOASPR:	clc
+	ror	R1			; addr >> 1
+	mov	R1, LOAS04		; addr in cpu -> LOAS04
+	mov	R1, @#177010		;
+	mov	@#177014, R2		; DX, DY
+	swab	R2			;
+	movb	R2, R3			;
+	bic	#^B1111111100000000, R3	;
+	swab	R2			;
+	bic	#^B1111111100000000, R2	;
+	mov	R2, LOAS01		; save DX and DY
+	mov	R3, LOAS02		;
+	inc	LOAS04			; CPU addr to source bytes
+	; count DST size in words
+	inc	R2			; preshifted are 1 byte wide
+	mul	R2, R3			; ->R3 - size
+	mov	R3, LOAS11		; preshifted size -> R3
+	inc	R3			; sure to have space
+	clc
+	ror	R3
+	mov	R3, LOAS03		; LOAS03 <- DST size in words
+	; allocate memory
+	mov	R3, R1
+	asl	R1			; *8 
+	asl	R1			; room for preshifting
+	asl	R1			;
+	add	#10., R1		; +10 words (dx, dy, preshifting table)
+	call	MALLOC			; -> R5 addr
+	mov	R5, LOAS05		; save register	
+	add	#24., LOAS05		; +24bytes - real sprite data addr
+	; write sprite header
+	add	#4, R5			; to empty area	
+	mov	LOAS01, (R5)+		; store sprite DX
+	mov	LOAS02,	(R5)+		; store sprite DY
+	mov	LOAS03, R4
+	asl	R4			; size(bytes)->R4
+	mov	LOAS05, R2		; adr -> R2
+	; write preshift table addrs
+	mov	#8., R3
+2$:	mov	R2, (R5)+
+	add	R4, R2
+	sob	R3, 2$	
+	; count SRC size in words
+	mov	LOAS01, R2
+	mov	LOAS02, R3
+	mul	R2, R3
+	mov	R3, LOAS10		; SRC size -> LOAS10
+	inc	R3			; make sure size in words is correct
+	clc
+	ror	R3			; R3 <- size in words
+	; copy SRC -> DST without preshifting
+	mov	LOAS04, @#177010
+11$:	mov	@#177014, (R5)+
+	inc	@#177010
+	sob	R3, 11$
+	; realloc bytes to (dx+1) bytes
+	mov	LOAS01, R1		; dx
+	mov	LOAS02,	R2		; dy
+	mov	LOAS05, R5		; #0 spr adr
+	mov	R5, R4
+	add	LOAS10, R4		; at the end of w/o ext byte
+	add	LOAS11, R5		; at the and of with ext byte
+12$:	clrb	-(R5)
+	mov	R1, R3
+14$:	movb	-(R4), -(R5)
+	sob	R3, 14$
+	sob	R2, 12$
+	; preshifting	
+	mov	#1, LOAS03		; # of preshift
+20$:	mov	LOAS05, R5		; R5 - initial adr
+	mov	R5, R4
+	sub	#16., R4
+	mov	LOAS03, R3
+	asl	R3
+	add	R3, R4			
+	mov	(R4), R4		; R4 - shifted addr
+	mov	LOAS02, R2
+21$:	mov	LOAS01, R1
+22$:	movb	(R5)+, R0
+	bic	#^B1111111100000000, R0
+	mov	LOAS03, R3
+24$:	asl	R0			; shift by LOAS03
+	sob	R3, 24$
+	bisb	R0, (R4)+		; set bytes
+	swab	R0
+	bisb	R0, (R4)
+	sob	R1, 22$
+	inc	R5
+	inc	R4
+	sob	R2, 21$
+	; next shift
+	inc	LOAS03
+	cmp	LOAS03, #8.
+	blo	20$
+	return
+	
+
+; framebuffer clear
+FBCLEA:	mov	#FBOBJT, R0
+10$:	tst	(R0)
+	beq	90$
+	mov	(R0)+, R5	; type
+	mov	(R0)+, R4	; fb vaddr
+	mov	(R0)+, R3	; dy
+	cmp	#1, R5
+	bne	30$
+	; spr 16x16 type	
+	mov	#78., R1
+20$:	clrb	(R4)+
+	clrb	(R4)+
+	clrb	(R4)
+	add	R1, R4
+	sob	R3, 20$
+	br	10$
+30$:	; bat type
+	mov	#80., R1
+32$:	clrb	(R4)
+	add	R1, R4
+	sob	R3, 32$
+	br	10$
+90$:	; fb addr to start
+	mov	#FBOBJT, FBOBJA
+	clr	FBOBJT
+	return
+
+
+; framebuffer move with registers
+FBMOVR:	mov	#FBOBJT, R0	; fb objects table addr
+10$:	tst	(R0)		; end of fb table?
+	bne	20$
+	return
+20$:	mov	(R0)+, R5	; type
+	mov	(R0)+, R4	; vaddr in fb
+	mov	(R0)+, R3	; dy
+	cmp	#1, R5		; spr type is (1), bat type is (2), npc bat type is ..
+	bne	30$
+	; spr 16x16
+	mov	R4, R5
+	sub	#40., R5	; dst vaddr
+	mov	#177010, R2
+	mov	R4, (R2)
+	mov	#177012, R4
+	mov	#78., R1	; vaddr + 80 - 2
+22$:	movb	(R4), (R5)+	; move to real vaddr from register vaddr
+	inc	(R2)
+	movb	(R4), (R5)+
+	inc	(R2)
+	movb	(R4), (R5)
+	add	R1, (R2)
+	add	R1, R5
+	sob	R3, 22$
+	br	10$
+30$:	mov	#177010, R2
+	mov	#80., R1	; vaddr + 80
+	mov	R4, R5
+	sub	#40., R5	; dst vaddr
+	mov	R4, (R2)
+	mov	#177012, R4
+80$:	movb	(R4), (R5)	; move to real vaddr from register vaddr
+	add	R1, (R2)
+	add	R1, R5
+	sob	R3, 80$	
+	br	10$
+	
+
+; put to framebuffer
+; R1, R2 - x, y, R3 - dy
+SPRF16:	asl	R2
+	mov	LINEAD(R2), R2
+	add	#40., R2	; -> to framebuffer	
+	mov	R1, R5
+	asr	R5
+	asr	R5
+	asr	R5
+	add	R5, R2		; vaddr -> R2
+	; store to fb objs
+	mov	FBOBJA, R5
+	mov	#1, (R5)+	; 16x16 spr type
+	mov	R2, (R5)+	; vaddr
+	mov	R3, (R5)+	; dy
+	clr	(R5)		; end
+	mov	R5, FBOBJA
+	return	
+
+; sprite 16 x DY
+; R0 - spr ID, R1, R2 - x, y
+SPRR16:	asl	R0
+	mov	OBJADR(R0), R0	; addr -> R0
+	tst	R0
+	bne	1$
+	return
+1$:	; get vaddr
+	asl	R2
+	mov	LINEAD(R2), R2
+	add	#40., R2	; -> to framebuffer	
+	mov	R1, R5
+	asr	R5
+	asr	R5
+	asr	R5
+	add	R5, R2		; vaddr -> R2
+	bic	#177770, R1	; shift value -> R1
+	asl	R1		; *2
+	add	#6., R0		; sprite DY addr -> R0
+	mov	(R0)+, R3	; sprite DY -> R3
+	add	R1, R0		
+	mov	(R0), R0	; preshifted addr -> R0
+	; if it's a ball - store to prev obj fb
+	tst	R4		; is it a ball
+	beq	30$
+	tst	BLCRDY
+	bmi	30$
+	mov	FBOBJA, R5
+	mov	#1, (R5)+	; #1 = sprite
+	mov	BLCRVA, (R5)+
+	mov	BLCRDY, (R5)+
+	clr	(R5)
+	mov	R5, FBOBJA
+30$:	; store to fb objs
+	mov	FBOBJA, R5
+	mov	#1, (R5)+	; 16x16 spr type
+	mov	R2, (R5)+	; vaddr
+	tst	R4
+	beq	32$
+	mov	BLCRVA, BLCRVA+2
+	mov	R2, BLCRVA
+32$:	mov	R3, (R5)+	; dy
+	tst	R4
+	beq	34$
+	mov	BLCRDY, BLCRDY+2
+	mov	R3, BLCRDY
+34$:	clr	(R5)		; end
+	mov	R5, FBOBJA
+	; draw with registers
+	mov	#177010, R4
+	mov	#177012, R5
+	mov	R2, (R4)
+	mov	#78., R1	; (next vline-2) -> R1
+50$:	bisb	(R0)+, (R5)
+	inc	(R4)
+	bisb	(R0)+, (R5)
+	inc	(R4)
+	bisb	(R0)+, (R5)
+	add	R1, (R4)	; next vline - 2
+	sob	R3, 50$
+	return	
+
+
+PRTD90:	.WORD	10000., 1000., 100., 10., 1
+
+; print decimal number
+; R0 - number, R1 - X, R2 - Y
+PRTDWO:	asl	R2
+	mov	LINEAD(R2), R2
+	add	R1, R2		; R2 <- vaddr
+	mov	R0, R5
+	mov	#PRTD90, R4
+	mov	#80., R1
+	mov	#5, R3
+1$:	mov	(R4)+, TEMPR1
+	mov	#SPRAL0, R0
+10$:	cmp	R5, TEMPR1
+	blo	20$
+	sub	TEMPR1, R5
+	add	#6., R0
+	br	10$
+20$:	movb	(R0), (R2)	; doubled lines number
+	add	R1, R2
+	movb	(R0)+, (R2)
+	add	R1, R2
+	movb	(R0), (R2)
+	add	R1, R2
+	movb	(R0)+, (R2)
+	add	R1, R2
+	movb	(R0), (R2)
+	add	R1, R2
+	movb	(R0)+, (R2)
+	add	R1, R2
+	movb	(R0), (R2)
+	add	R1, R2
+	movb	(R0)+, (R2)
+	add	R1, R2
+	movb	(R0), (R2)
+	add	R1, R2
+	movb	(R0)+, (R2)
+	add	R1, R2
+	movb	(R0), (R2)
+	add	R1, R2
+	movb	(R0), (R2)
+	sub	#879., R2	; next char vaddr
+	sob	R3, 1$
+	return
+
+	
+; print 00-99 decimal number
+; R0 - number, R1 - X, R2 - Y
+PRTDW2:	asl	R2
+	mov	LINEAD(R2), R2
+	add	R1, R2		; R2 <- vaddr
+	cmp	R0, #99.
+	blos	2$
+	mov	#99., R0
+2$:	mov	R0, R5
+	mov	#PRTD90, R4
+	add	#6., R4
+	mov	#80., R1
+	mov	#2, R3
+1$:	mov	(R4)+, TEMPR1
+	mov	#SPRAL0, R0
+10$:	cmp	R5, TEMPR1
+	blo	20$
+	sub	TEMPR1, R5
+	add	#6., R0
+	br	10$
+20$:	movb	(R0), (R2)	; doubled lines number
+	add	R1, R2
+	movb	(R0)+, (R2)
+	add	R1, R2
+	movb	(R0), (R2)
+	add	R1, R2
+	movb	(R0)+, (R2)
+	add	R1, R2
+	movb	(R0), (R2)
+	add	R1, R2
+	movb	(R0)+, (R2)
+	add	R1, R2
+	movb	(R0), (R2)
+	add	R1, R2
+	movb	(R0)+, (R2)
+	add	R1, R2
+	movb	(R0), (R2)
+	add	R1, R2
+	movb	(R0)+, (R2)
+	add	R1, R2
+	movb	(R0), (R2)
+	add	R1, R2
+	movb	(R0), (R2)
+	sub	#879., R2	; next char vaddr
+	sob	R3, 1$
+	return
+	
+
+; clear plane 0
+CLRSC0:	call	FBCLEA
+	mov	#100000, R0
+	mov	#26400, R5	; 55000(8) bytes
+	clr	(R0)+
+	sob	R5, .-2
+	return
+	
+
+; bat drawing
+; R1 - X, R2 - Y, R3 - DY, R4 - BATMOD
+BATDRW:	asl	R2
+	mov	LINEAD(R2), R2
+	add	R1, R2		; R2 <- vaddr
+	; BATMOD == 0 - clear
+	tst	R4
+	bne	10$
+	mov	R2, R1
+	add	#40., R1
+	sub	#<3*80.>, R2
+	sub	#<3*80.>, R1
+	mov	#7., R3
+1$:	clrb	(R1)
+	clrb	(R2)
+	add	#80., R1
+	add	#80., R2
+	sob	R3, 1$
+	return
+10$:	; drawing to framebuffer
+	add	#40., R2
+	mov	R3, TEMPR3	; TEMPR3 <- DY
+	movb	#^B10111111, (R2)
+	mov	R2, R4
+	sub	#80., R2
+	add	#80., R4
+20$:	movb	#^B10111111, (R2)
+	movb	#^B10111111, (R4)
+	sub	#80., R2
+	add	#80., R4
+	sob	R3, 20$	
+	clrb	(R2)
+	clrb	(R4)
+	sub	#80., R2
+	add	#80., R4
+	movb	#^B01011110, (R2)
+	movb	#^B01011110, (R4)
+	sub	#80., R2
+	add	#80., R4
+	clrb	(R2)
+	clrb	(R4)
+	sub	#80., R2
+	add	#80., R4
+	clrb	(R2)
+	clrb	(R4)
+	; store previous bat to fb objs if needed
+	tst	BTCRDY
+	bmi	30$
+	mov	FBOBJA, R5
+	mov	#2, (R5)+
+	mov	BTCRVA, (R5)+
+	mov	BTCRDY, (R5)+
+	clr	(R5)
+	mov	R5, FBOBJA
+30$:	; store current to fb objs
+	mov	FBOBJA, R5
+	mov	#2, (R5)+	; bat type
+	mov	R2, (R5)+	; vaddr
+	mov	BTCRVA, BTCRVA+2
+	mov	R2, BTCRVA
+	mov	TEMPR3, R3	; counting real drawn dy
+	asl	R3
+	add	#9., R3
+	mov	R3, (R5)+	; dy
+	mov	BTCRDY, BTCRDY+2
+	mov	R3, BTCRDY
+	clr	(R5)		; end
+	mov	R5, FBOBJA	
+	return
+
+; 'pong' bat drawing
+; R0 - BatNpc if <>0, R1 - X, R2 - Y, R3 - DY, R4 - BATMOD
+BATDR2:	mov	R0, BATNPC
+	asl	R2
+	mov	LINEAD(R2), R2
+	add	R1, R2		; R2 <- vaddr
+	; BATMOD == 0 - clear
+	tst	R4
+	bne	10$
+	mov	R2, R1
+	add	#40., R1
+	sub	#<3*80.>, R2
+	sub	#<3*80.>, R1
+	mov	#7., R3
+1$:	clrb	(R1)
+	clrb	(R2)
+	add	#80., R1
+	add	#80., R2
+	sob	R3, 1$
+	return
+10$:	; drawing to framebuffer
+	add	#40., R2
+	mov	R3, TEMPR3	; TEMPR3 <- DY
+	movb	#^B11111111, (R2)
+	mov	R2, R4
+	sub	#80., R2
+	add	#80., R4
+20$:	movb	#^B11111111, (R2)
+	movb	#^B11111111, (R4)
+	sub	#80., R2
+	add	#80., R4
+	sob	R3, 20$	
+	movb	#^B11111111, (R2)
+	movb	#^B11111111, (R4)
+	sub	#80., R2
+	add	#80., R4
+	movb	#^B11111111, (R2)
+	movb	#^B11111111, (R4)
+	sub	#80., R2
+	add	#80., R4
+	clrb	(R2)
+	clrb	(R4)
+	sub	#80., R2
+	add	#80., R4
+	clrb	(R2)
+	clrb	(R4)
+	; if it's a player bat - draw store prev fb
+	tst	BATNPC
+	bne	40$
+	; store previous bat to fb objs if needed
+	tst	BTCRDY
+	bmi	30$
+	mov	FBOBJA, R5
+	mov	#2, (R5)+
+	mov	BTCRVA, (R5)+
+	mov	BTCRDY, (R5)+
+	clr	(R5)
+	mov	R5, FBOBJA
+30$:	; store to fb objs
+	mov	FBOBJA, R5
+	mov	#2, (R5)+	; bat type
+	mov	R2, (R5)+	; vaddr
+	mov	BTCRVA, BTCRVA+2
+	mov	R2, BTCRVA
+	mov	TEMPR3, R3	; counting real drawn dy
+	asl	R3
+	add	#9., R3
+	mov	R3, (R5)+	; dy
+	mov	BTCRDY, BTCRDY+2
+	mov	R3, BTCRDY
+	clr	(R5)		; end
+	mov	R5, FBOBJA	
+	return
+40$:	; store to fb objs NPC
+	mov	FBOBJA, R5
+	mov	#2, (R5)+	; bat type
+	mov	R2, (R5)+	; vaddr
+	mov	TEMPR3, R3	; counting real drawn dy
+	asl	R3
+	add	#9., R3
+	mov	R3, (R5)+	; dy
+	clr	(R5)		; end
+	mov	R5, FBOBJA	
+	return
+	
+	
+; //////////////////////////////////////////////////////////////////////////////
+
+; keyboard interrupt
+KEYBI:	mov	R0, -(SP)
+	mov	R1, -(SP)
+	mov	@#177010, -(SP)
+	;
+	mov	@#177702, R0		; (!) read this register ONLY ONCE
+	mov	#KEYCUR, @#177010	
+	mov	R0, @#177014	
+	bit	#^B10000000, R0
+	bne	50$
+	; key pressed
+	; put it to buffer
+	mov	#KEYBUF, R1
+	mov	2(R1), (R1)
+	mov	4(R1), 2(R1)
+	mov	6(R1), 4(R1)
+	mov	10(R1), 6(R1)
+	mov	12(R1), 10(R1)
+	mov	R0, 12(R1)
+	; check for buffer combo ^_^
+	call	KCOMBC
+	; process key press
+	mov	#KEYSDN, R1
+10$:	tst	(R1)
+	beq	90$
+	cmp	R0, (R1)+
+	beq	20$
+	add	#4, R1
+	br	10$
+20$:	; got our key
+	mov	(R1)+, R0
+	mov	R0, @#177010
+	mov	#1, @#177014
+	mov	(R1)+, R0
+	beq	10$	
+	mov	R0, @#177010
+	clr	@#177014
+	br	10$
+50$:	; key released
+	bic	#^B10000000, R0
+	mov	#KEYSUP, R1
+60$:	tst	(R1)
+	beq	90$
+	cmp	R0, (R1)+
+	beq	70$
+	add	#4, R1
+	br	60$
+70$:	; got our key
+	mov	(R1)+, R0
+	mov	R0, @#177010
+	clr	@#177014
+	mov	(R1)+, R0
+	beq	60$
+	mov	R0, @#177010
+	clr	@#177014
+	br	60$
+	;
+90$:	mov	(SP)+, @#177010
+	mov	(SP)+, R1
+	mov	(SP)+, R0
+	rti
+
+; check for key buffer combo ^_^
+KCOMBC:	mov	#KEYBUF, R1
+	cmp	#134, (R1)+	; down
+	bne	90$
+	cmp	#134, (R1)+	; down
+	bne	90$
+	cmp	#154, (R1)+	; up
+	bne	90$
+	cmp	#154, (R1)+	; up
+	bne	90$
+	cmp	#134, (R1)+	; down
+	bne	90$
+	cmp	#154, (R1)+	; up
+	bne	90$
+	; got it!
+	mov	#KEYCOM, @#177010
+	mov	#1, @#177014
+90$:	return
+
+	
+; //////////////////////////////////////////////////////////////////////////////
+; // MUS & SND 
+; //////////////////////////////////////////////////////////////////////////////
+
+; mus processor
+MUSPRO:	tst	MUSCUR		; current note addr
+	bne	1$		; are we are playing?
+	return			; no - return
+1$:	mov	#VSY2CN, @#177010
+	cmp	@#177014, #3	; was vsync?
+	bhi	2$
+	return
+2$:	mov	#VSY2CN, @#177010
+	clr	@#177014
+	;	
+	mtps	#600
+	mov	MUSCUR, R0
+	mov	(R0)+, R1	; note id
+	bne	20$
+	call	PPTINI
+	clr	MUSCUR
+	mtps	#0
+	return
+20$:	asl	R1
+	mov	NOTPAD(R1), @#177712	; play it
+	tst	@#177714
+	tst	@#177714
+	tst	@#177714
+	mov	R0, MUSCUR
+	mtps	#0
+	return
+
+; pp timer ready wait
+PPTINI:	clr	@#177710
+	tst	@#177714
+	tst	@#177710
+	bne	PPTINI
+	return
+
+; start sound, R0 - addr
+SNDSTA:	mtps	#600
+	call	PPTINI
+	asl	R0
+	mov	SNDTAB(R0), R0
+	beq	99$
+	mov	(R0)+, R1
+	beq	99$
+	mov	R0, SNDADR
+	mov	R1, @#177712	; load counter
+	tst	@#177714
+	tst	@#177714
+	tst	@#177714
+	mov	#SNDINT, @#304		; set sound int
+	bis	#^B01000001, @#177710	; allow int, start
+99$:	mtps	#0
+	return
+
+; start music, R0 - addr
+MUSSTA:	mtps	#600
+	call	PPTINI			; init pp timer
+	tst	R0			; 0 - stop music
+	bne	10$
+	clr	MUSCUR
+	mtps	#0
+	return
+10$:	asl	R0
+	mov	MUSTAB(R0), R0		; addr from music table
+	mov	(R0)+, R1
+	asl	R1
+	mov	NOTPAD(R1), R1
+	mov	R1, @#177712		; initial counter
+	mov	R0, MUSCUR		; second note addr
+	tst	@#177714
+	tst	@#177714
+	tst	@#177714
+	mov	#MUSIN0, @#304		; set music interrupt
+	bis	#^B01000001, @#177710	; allow int, start
+	mtps	#0
+	return
+
+; start single note
+MUSNST:	mtps	#600
+	call	PPTINI
+	mov	#956., @#177712
+	tst	@#177714
+	tst	@#177714
+	tst	@#177714
+	mov	#MUSIN0, @#304
+	bis	#^B01000001, @#177710
+	mtps	#0
+	return
+
+; change pp timer
+MUSNOT:	mtps	#600
+	mov	R0, @#177712
+	tst	@#177714
+	tst	@#177714
+	tst	@#177714
+	mtps	#0
+	return
+
+; PP timer interrupt (for pulse-width modulation)
+SNDINT:	mov	R0, -(SP)
+	mov	#200, R0
+	xor	R0, @#177716
+	mov	@SNDADR, R0
+	beq	90$
+	mov	R0, @#177712
+	add	#2, SNDADR
+	tst	@#177714
+	tst	@#177714
+	mov	(SP)+, R0
+	rti
+90$:	clr	@#177710	; stop timer and ints
+	tst	@#177714
+	tst	@#177714
+	mov	(SP)+, R0
+	rti
+
+; PP timer interrupts (for tones)
+MUSIN0:	bic	#200, @#177716
+	mov	#MUSIN1, @#304
+	br	MUSIN3
+MUSIN1:	mov	#MUSIN0, @#304
+MUSIN2:	bis	#200, @#177716
+MUSIN3:	tst	@#177714
+	tst	@#177714
+	rti		
+	
+; empty interrupt
+RTICNT:	.WORD	0
+RTIADR:	inc	RTICNT
+	rti
+
+; request RTICNT to CPU
+REQRCN:	mov	#RTICN2, @#177010
+	mov	RTICNT, @#177014
+	return
+
+; pallete change
+PALUPD:	mov	#^B1111101011111000, R1
+	mov	#^B1111101111111110, R2
+	tst	R0
+	bne	10$
+	mov	#^B1111110011111000, R1	; 011 010 001 000
+	mov	#^B1111110111111110, R2	; 111 110 101 100
+10$:	mov	R1, @#2000
+	mov	R2, @#2002
+	mov	#2020, R5
+	mov	#286., R3
+20$:	mov	R1, (R5)+
+	mov	R2, (R5)+
+	add	#4., R5
+	sob	R3, 20$
+	return
+
+; some procedural tunes
+PRCMUS:	mov	#174, R5
+	mov	#10000, R2
+	mov	#3, R1
+	mov	#3, R4
+5$:	mov	#5000, R3
+10$:	sub	R4, R2
+	bit	R1, R2
+	beq	20$
+	bis	#200, @#177716
+	br	30$
+20$:	bic	#200, @#177716
+30$:	nop
+	dec	R3
+	bne	10$
+	inc	R1
+	dec	R5
+	bne	5$
+	return
+
+	
+; fatal error
+ERROR:	mtps	#600		; halt mode
+	mov	#117500, R5
+	mov	#SPRERR, R0
+	mov	#7., R2
+2$:	movb	(R0)+, (R5)+
+	movb	(R0)+, (R5)+
+	movb	(R0)+, (R5)+
+	sub	#3, R5
+	add	#80., R5
+	sob	R2, 2$
+	br	.
+
+; //////////////////////////////////////////////////////////////////////////////
+; // PPU DATA SECTION //////////////////////////////////////////////////////////
+; //////////////////////////////////////////////////////////////////////////////
+
+CMDADR:	.WORD	0
+
+TEMPR0:	.WORD	0
+TEMPR1:	.WORD	0
+TEMPR2:	.WORD	0
+TEMPR3:	.WORD	0
+TEMPR4:	.WORD	0
+TEMPR5:	.WORD	0
+
+BLCRVA:	.word	-1, -1
+BLCRDY:	.word	-1, -1
+
+BATNPC:	.word	0
+BTCRVA:	.word	-1, -1
+BTCRDY:	.word	-1, -1
+
+PPUNOM:	.word	0			; do we have a mouse in 177400, 1 - no, 0 - yes
+MOUSEY:	.word	144.
+MOUBTN:	.word	0
+
+; keys release - clear next addrs
+KEYSUP:	.WORD	^B0111, KEYDWN, KEYUP	; DKL 2 
+	.WORD	^B0101, KEYDWN, KEYUP	; DKL 8
+	.WORD	^B0100, KEYSTP, 0	; STOP
+	.WORD	^B1010, KEYHLT, 0	; UST
+	.WORD	^B1000, KEY1,   0	; 1
+	.WORD	^B1001, KEY2,   0	; 2
+	.WORD	^B1010, KEY3,   0	; 3
+	.WORD	^B1011, KEY4,   0	; 4
+	.WORD	^B1011, KEYSPC, 0	; SPACE
+	.WORD	^B1100, KEYDWN, KEYUP	; UP/DOWN
+	.WORD	^B1000, KEYK1,  0	; K1
+	.WORD	0
+	
+; keys press - set 1st addr, clear second
+KEYSDN:	.WORD	^B01100111, KEYDWN, KEYUP	; DKL 2
+	.WORD	^B01100101, KEYUP,  KEYDWN	; DKL 8
+	.WORD	^B00000100, KEYSTP, 0		; STOP
+	.WORD	^B01101010, KEYHLT, 0		; UST
+	.WORD	^B00011000, KEY1,   0		; 1
+	.WORD	^B00011001, KEY2,   0		; 2
+	.WORD	^B00011010, KEY3,   0		; 3
+	.WORD	^B00001011, KEY4,   0		; 4
+	.WORD	^B01001011, KEYSPC, 0		; SPACE
+	.WORD	^B01011100, KEYDWN, KEYUP	; DOWN
+	.WORD	^B01101100, KEYUP,  KEYDWN	; UP
+	.WORD	^B00001000, KEYK1,  0		; K1
+	.WORD	0
+	
+; last pressed 6 keys
+KEYBUF:	.BLKW	6
+	
+SPRERR:	.BYTE	177, 177, 177, 101, 101, 101, 175, 135, 135, 101, 101, 101
+	.BYTE	175, 165, 165, 101, 155, 155, 177, 177, 177, 0
+
+FN6OF2:	.WORD	0, 6, 14, 22, 30, 36, 44, 52
+	.WORD	60, 66, 74, 102, 110, 116, 124, 132
+	.WORD	140, 146, 154, 162, 170, 176, 204, 212
+	.WORD	220, 226, 234, 242, 250, 256, 264, 272
+	.WORD	300, 306, 314, 322, 330, 336, 344, 352
+	.WORD	360, 366, 374, 402, 410, 416, 424, 432
+	.WORD	440, 446, 454, 462, 470, 476, 504, 512
+	.WORD	520, 526, 534, 542, 550, 556, 564, 572 
+	
+FN6DA2:	.BYTE	0, 0, 0, 0, 0, 0
+	.BYTE	30, 30, 30, 30, 0, 30
+	.BYTE	50, 0, 0, 0, 0, 0
+	.BYTE	0, 50, 174, 50, 174, 50
+	.BYTE	20, 174, 24, 174, 120, 174
+	.BYTE	0, 146, 60, 30, 314, 0
+	.BYTE	0, 30, 44, 274, 102, 74
+	.BYTE	20, 0, 0, 0, 0, 0
+	.BYTE	60, 30, 30, 30, 30, 60
+	.BYTE	30, 60, 60, 60, 60, 30
+	.BYTE	0, 44, 30, 74, 30, 44
+	.BYTE	0, 30, 30, 176, 30, 30
+	.BYTE	0, 0, 0, 0, 30, 20
+	.BYTE	0, 0, 0, 74, 0, 0
+	.BYTE	0, 0, 0, 0, 0, 30
+	.BYTE	300, 140, 60, 30, 14, 6
+SPRAL0:	.BYTE	176, 102, 102, 302, 302, 376
+	.BYTE	20, 20, 20, 60, 60, 60
+	.BYTE	76, 142, 300, 376, 2, 376
+	.BYTE	76, 140, 300, 360, 300, 376
+	.BYTE	160, 130, 114, 106, 376, 100
+	.BYTE	360, 30, 14, 376, 300, 374
+	.BYTE	360, 30, 14, 376, 306, 376
+	.BYTE	376, 300, 140, 60, 30, 14
+	.BYTE	36, 62, 102, 376, 202, 376
+	.BYTE	76, 142, 302, 376, 300, 376
+	.BYTE	0, 0, 30, 0, 30, 0
+	.BYTE	0, 0, 30, 0, 20, 10
+	.BYTE	0, 60, 30, 14, 30, 60
+	.BYTE	0, 0, 74, 0, 74, 0
+	.BYTE	0, 14, 30, 60, 30, 14
+	.BYTE	174, 100, 170, 30, 0, 30
+	.BYTE	74, 102, 132, 72, 2, 74
+	.BYTE	300, 340, 260, 370, 214, 206
+	.BYTE	176, 106, 176, 206, 206, 376
+	.BYTE	360, 230, 14, 6, 6, 376
+	.BYTE	36, 46, 106, 206, 206, 376
+	.BYTE	76, 6, 176, 6, 6, 376
+	.BYTE	376, 6, 76, 6, 6, 6
+	.BYTE	360, 230, 14, 306, 206, 376
+	.BYTE	206, 206, 376, 206, 206, 206
+	.BYTE	70, 20, 20, 20, 20, 70
+	.BYTE	374, 40, 40, 40, 20, 16
+	.BYTE	106, 106, 176, 306, 206, 206
+	.BYTE	60, 30, 14, 6, 6, 376
+	.BYTE	376, 266, 266, 266, 206, 206
+	.BYTE	36, 46, 106, 206, 206, 206
+	.BYTE	360, 230, 214, 206, 206, 376
+	.BYTE	76, 106, 206, 376, 6, 6
+	.BYTE	360, 230, 214, 246, 306, 376
+	.BYTE	376, 206, 106, 76, 106, 206
+	.BYTE	370, 214, 6, 376, 200, 376
+	.BYTE	374, 60, 60, 60, 60, 60
+	.BYTE	206, 206, 206, 214, 230, 360
+	.BYTE	206, 206, 306, 146, 66, 36
+	.BYTE	206, 206, 206, 266, 266, 316
+	.BYTE	306, 154, 30, 154, 306, 306
+	.BYTE	206, 206, 376, 200, 100, 76
+	.BYTE	376, 142, 60, 30, 214, 376
+	.BYTE	70, 30, 30, 30, 30, 70
+	.BYTE	6, 14, 30, 60, 140, 300
+	.BYTE	70, 60, 60, 60, 60, 70
+	.BYTE	30, 54, 0, 0, 0, 0
+	.BYTE	0, 0, 0, 0, 0, 174
+
+	
+SNDADR:	.WORD	0
+SNDTAB:	.WORD	0, SND001, SND002, SND003, SND004, SND005
+
+.radix 10
+SND001:	.WORD	216, 184, 192, 184, 184, 192, 184, 192, 176, 200, 176, 208
+	.WORD	168, 216, 160, 224
+	.WORD	0
+
+SND002:	.WORD	112,112,112,112,112,104,112,104,112,96,112,96,104,88
+	.WORD	0
+
+SND003:	.WORD	296, 272, 256, 3808,3808,     216, 184, 176,  3960,3960 
+	.WORD	184, 144, 136, 4040,4040,     128,  80, 112,  4080,4080 
+	.WORD	384, 352, 320, 3760,3760,     416, 384, 352,  3720,3720 
+	.WORD	 96,  80,  72, 4090,4090,60,  128, 144, 176,  4060,4060
+	.WORD	176, 192, 208, 4000,4000,     208, 224, 240,  3960,3960 
+	.WORD	176, 192, 208, 4000,4000,     128, 144, 176,  4060,4060
+	.WORD	 96,  80,  72, 4090,4090,      80,  72,  64
+	.WORD	0  
+
+
+SND004:	.WORD	420, 410, 420, 430, 440, 450, 450, 450, 450, 450, 450, 450
+	.WORD	450, 440, 430, 430, 430, 420, 420, 420
+	.WORD	4040, 2020
+	.WORD	230, 232, 234, 236, 238, 240, 238, 236, 236, 236, 236, 236
+	.WORD	234, 232, 230, 230, 230, 230, 230, 230, 230, 230, 230, 230
+	.WORD	230, 230, 230, 230, 230, 230, 230, 230, 230, 230, 230, 230
+	.WORD	230, 232, 232, 234, 235, 235
+	.WORD	4040, 2030
+	.WORD	340, 340, 341, 342, 342, 342, 342, 342, 342, 340, 340, 340
+	.WORD	340, 340, 341, 342, 342, 342, 342, 342, 342, 340, 340, 340
+	.WORD	340, 340
+	.WORD	4040, 2040
+	.WORD	161, 162, 163, 163, 163, 163, 164, 164, 164, 165, 165, 165
+	.WORD	165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165
+	.WORD	165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165
+	.WORD	165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165
+	.WORD	165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165
+	.WORD	0
+
+SND005:	.WORD	90, 80, 100, 80, 90, 90, 90, 90
+	.WORD	90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90
+	.WORD	92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103
+	.WORD	104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115
+	.WORD	116, 117, 118, 119, 120, 121, 122
+	.WORD	0
+ 
+MUSCUR:	.WORD	0 
+MUSADR:	.WORD	0
+MUSTAB:	.WORD	0, MUS001
+
+; notes
+NOTPAD:	.WORD	1000
+	.WORD	956, 902, 851, 804, 758, 716, 676, 638, 602, 568, 536, 506
+	.WORD	478, 451, 426, 402, 379, 358, 338, 319, 301, 284, 268, 253
+	.WORD	239, 225, 213, 201, 190, 179, 169, 159, 150, 145, 134, 127
+	.WORD	119, 113, 106, 100, 95,  89,  84,  80,  75,  73,  67,  63
+
+; C             D             E      F             G             A             B
+; C4-37  C#4-38 D4-39  D#4-40 E4-41  F4-42  F#4-43 G4-44  G#4-45 A4-46  A#4-47 B4-48
+; C3-25  C#3-26 D3-27  D#3-28 E3-29  F3-30  F#3-31 G3-32  G#3-33 A3-34  A#3-35 B3-36
+; C2-13  C#2-14 D2-15  D#2-16 E2-17  F2-18  F#2-19 G2-20  G#2-21 A2-22  A#2-23 B2-24
+; C1-01  C#1-02 D1-03  D#1-04 E1-05  F1-06  F#1-07 G1-08  G#1-09 A1-10  A#1-11 B1-12
+
+;MUS001:	.WORD	01, 03, 05, 06, 08, 10, 12, 13, 12, 10, 08, 06, 05, 03
+;	.WORD	01, 05, 08, 13, 08, 05, 01, 05, 08, 13, 08, 05
+;	.WORD	13, 15, 17, 18, 20, 22, 24, 25, 24, 22, 20, 18, 17, 15
+;	.WORD	13, 17, 20, 25, 20, 17, 13, 17, 20, 25, 20, 17
+;	.WORD	25, 27, 29, 30, 32, 34, 36, 37, 36, 34, 32, 30, 29, 27
+;	.WORD	25, 29, 32, 37, 32, 29, 25, 29, 32, 37, 32, 29
+;	.WORD	37, 39, 41, 42, 44, 46, 48, 37, 48, 46, 44, 42, 41, 39
+;	.WORD	37, 41, 44, 37, 41, 44, 37, 41, 44, 37, 41, 44
+
+MUS001: .WORD	41, 13, 20, 13
+	.WORD	41, 39, 37, 41
+	.WORD	42, 18, 42, 18
+	.WORD	39, 15, 44, 20
+
+	.WORD	15, 20, 44, 20
+	.WORD	48, 46, 44, 39
+	.WORD	42, 18, 44, 20
+	.WORD	42, 18, 42, 13
+	
+	.WORD	01, 20, 32, 20
+	.WORD	05, 20, 32, 20
+	.WORD	06, 30, 34, 30
+	.WORD	34, 30, 34, 30
+	
+	.WORD	03, 31, 34, 31
+	.WORD	07, 31, 34, 31
+	.WORD	08, 32, 36, 39
+	.WORD	44, 39, 36, 32
+
+	.WORD	0, 0
+	
+.radix 8
+	
+OBJADR:	.BLKW	100	; loaded objects addr table (64)
+
+FBOBJA:	.WORD	0
+FBOBJT:	.BLKW	300	; framebuffer objs: [type, vaddr, dy]
+FBOBJE:	.WORD	0
+
+END:
+
+; // ADDRESSes /////////////////////////////////////////////////////////////////
+
+LINEAD=6400	; vaddr lines array
+
+; its ADDR/2 for CPU-PPU exchange
+CMDBUF=64000	; ~4kb commands buffer
+PPUYYY=67777	; PPU state
+VSY1CN=67776	; vsync 1 counter
+VSY2CN=67775	; vsync 2 counter
+KEYCUR=67774	; current key
+KEYUP =67773
+KEYDWN=67772
+KEYLFT=67771
+KEYRHT=67770
+KEYSPC=67767
+KEYENT=67766
+KEY1  =67765
+KEY2  =67764
+KEYHLT=67763
+KEYSTP=67762
+KEYK1 =67761
+KEY3  =67760
+RTICN2=67757
+KEYCOM=67756
+KEY4  =67755
+CMOUSY=67754
+CNOMOU=67753
+
+	.END	START

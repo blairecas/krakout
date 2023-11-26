@@ -1,0 +1,486 @@
+	.TITLE	KRKOUT
+	.IDENT	/V01.00/
+	.MCALL	.PRINT .TTYIN .FETCH .LOOKUP .READW .CLOSE .EXIT
+	.ENABL	LC
+
+; // DATA //////////////////////////////////////////////////////////////////////
+
+; readfile data
+;
+MSGADR:	.WORD	0
+MSG000:	.ASCIZ	<12>/KRAKOUT for UKNC. Run Y/<57>/[N]?/
+MSG001:	.ASCIZ	/ERR: Device DK: not found/
+MSG002:	.ASCIZ	/ERR: Channel #7 is active/
+MSG003:	.ASCIZ	/ERR: File KRKBIN.DAT not found/
+MSG005:	.ASCIZ	/ERR: File read error/
+MSGCLS: .BYTE	033, 014, 110, 0
+	.EVEN
+AREA01:	.BLKW	5
+DKN001:	.RAD50	"DK "
+	.RAD50	"KRK"
+	.RAD50	"BIN"
+	.RAD50	"DAT"
+BUF001:	.BLKW	200
+LEN002:	.WORD	128.
+POI002:	.WORD	0
+LOAC02:	.WORD	0	; 1 - PPU need to update percentage
+LOAA02:	.WORD	0	; (0..31)*256 - loading percentage
+LOAA03:	.WORD	0	; loading percentage addition
+BUF002:	.BLKW	256.
+	.WORD	0, 1, 2, 3, 4, 5, 6, 7
+	
+PPSYIN:	.WORD	0	; exchange with PPU 
+
+; PPU data exchange array
+;
+PPARR:	.BYTE	0	; return value (0 - OK)
+PPCMD:	.BYTE	0	; command
+	.WORD	32	; device type (32 - PPU)
+PPAPP:	.WORD	0	; address for PPU
+PPACP:	.WORD	0	; address for CPU
+PPLEN:	.WORD	0	; length in words
+
+; PPU message
+;
+PPMSG:	.WORD	PPARR	; address of beginning of array
+        .WORD	177777	; end of transmission
+
+MSG010:	.ASCIZ	/ERR - (PPU) Allocate memory failed/
+	.EVEN
+
+	
+; // START /////////////////////////////////////////////////////////////////////
+
+START:	.PRINT	#MSG000			; helloworld!!111one
+	bis	#10000, @#44		; don't echo keys
+	.TTYIN				; input char -> R0
+	cmp	R0, #131		; Y char
+	beq	1$
+	.EXIT
+
+1$:	mov	#MSGCLS, MSGADR		; clear screen
+	.PRINT	MSGADR
+	
+	mtps	#200			; stop some interrupts (but not halt)
+	mov	#10, PPSYIN		; ask PPU for 'phase 1 ready'
+
+	mov	#PPUSTA, R4		; run PPU code
+	mov	#<PPUEND-PPUSTA/2>, R5
+	call	PPRUN
+	
+	cmp	#01, PPSYIN		; wait for 'ppu phase 1 ready'
+	bne	.-6
+	
+	call	READFL			; read file
+	bcc	10$			; if no error
+
+	; exit with error
+	mov	#00, PPSYIN		; ask PPU to exit and cleanup
+	cmp	#00, PPSYIN
+	bne	.-6	
+	mtps	0
+	.PRINT	MSGADR
+	.EXIT
+	
+10$:	mov	#20, PPSYIN		; ask for phase 2
+	cmp	#02, PPSYIN		; wait for 'ppu phase 2 ready'
+	bne	.-6
+
+	; relocate some code to #157700 addr
+	mov	PC, R4			;
+	add	#CPURE0-., R4		; start -> R4
+	mov	#157700, R5		; move to -> R5
+	mov	#<CPURE1-CPURE0/2>, R3	; words count
+99$:	mov	(R4)+, (R5)+
+	sob	R3, 99$
+	jmp	@#157700		; go there
+
+; .=157700
+; VRAM -> CPU RAM
+;
+CPURE0: mov     #100002, @#176640
+        mov     @#176642, R5            ; R5 <- starting CPU addr
+        mov     R5, R4
+        inc     @#176640
+        mov     @#176642, R3            ; R3 <- length of CPU code in words
+        mov     #100010, @#176640       ; CPU code starting addr in vram
+1$:	mov	@#176642, (R5)+		; from planes 1&2 -> dest
+	inc	@#176640
+	sob	R3, 1$
+	jmp	(R4)			; START MAIN CPU CODE
+CPURE1:
+
+	
+; // CPU routines //////////////////////////////////////////////////////////////
+
+; read file 
+;
+READFL:	.FETCH	#BUF001, #DKN001	; test device
+	bcc	10$
+	mov	#MSG001, MSGADR		; device error
+	sec
+	return
+10$:	.LOOKUP	#AREA01, #7, #DKN001	; test file
+	bcc	20$
+	tstb	@#52			; check what error
+	bne	12$
+	mov	#MSG002, MSGADR		; channel is active
+	sec
+	return
+12$:	mov	#MSG003, MSGADR		; file not found
+	sec
+	return
+20$:	; reading
+	mov	#100000, POI002		; vaddr ->
+	mov	#128., LEN002		; maximum is 128 blocks by 512 bytes
+	clr	R1			; starting block
+40$:	.READW	#AREA01, #7, #BUF002, #256., R1
+	bcc	50$			; need tstb @#52, beq eof
+	mov	#MSG005, MSGADR		; read error
+	sec
+	return
+50$:    mov     #BUF002, R0
+        ; if its a first block - get our parameters from first 16 bytes
+        tst     R1
+        bne     55$
+        mov     (R0), LEN002            ; +00 - length in blocks
+        mov     2(R0), LOAA03           ; +02 - loading percentage to add
+                                        ; +04 - cpu starting addr
+                                        ; +06 - cpu length in bytes
+                                        ; +10 - ppu starting addr
+                                        ; +12 - ppu length in bytes
+                                        ; +14 - reserved
+                                        ; +16 - reserved
+55$:	inc	R1        
+	mov	POI002, @#176640	; vram addr
+	mov	#176640, R4
+	mov	#176642, R5
+	mov	#256., R3		; read 512 bytes - 1 block
+60$:	mov	(R0)+, (R5)
+	inc	(R4)
+        inc     POI002
+	sob	R3, 60$
+        ; loading percentage addition
+	add	LOAA03, LOAA02
+	inc	LOAC02			; 'need to update' signal
+	dec	LEN002
+	bne	40$
+	.CLOSE	#7			; close channel 7
+	clc				; set no error
+	return
+	
+; send command to PPU with exch array
+;
+PPSEN:	mov	R0, -(SP)
+	mov	R1, -(SP)
+	mov	#PPMSG, R0	; array address
+	mov	#5, R1		; bytes to send+1 (sending from @PP_MSG)
+	br	1$
+2$:	movb	(R0)+, @#176676
+1$:	tstb	@#176674	; test if we are ready to send
+	bpl	.-4		; cycle if >= 0 (not set last bit in byte)
+	sob	R1, 2$
+	mov	(SP)+, R1
+	mov	(SP)+, R0
+	return
+
+; send and start PPU code
+; R4 - start addr in CPU
+; R5 - length / 2
+;
+PPRUN:	movb	#1, PPCMD	; 1 - allocate memory
+	mov	R5, PPLEN
+	call	PPSEN
+	tstb	PPARR		; test if allocate success
+	beq	1$		; 0 - OK
+	.PRINT	#MSG010
+	.EXIT
+1$:	movb	#20, PPCMD	; 20 - write to PPU
+	mov	R5, PPLEN
+	mov 	R4, PPACP
+	call	PPSEN
+	movb	#30, PPCMD	; 30 - run
+	call	PPSEN
+	; 2 - release memory (i think will not need it)
+	; movb	#2, PPCMD
+	; mov	???, PPACP
+	; call	PPSEN
+	return
+
+	
+; // PPU first phase ///////////////////////////////////////////////////////////
+
+PPUSTA:	mov	PC, R0
+	add	#INTER1-., R0	; R0 - 'empty' interrupt addr
+
+	mov	@#300, BKW300	; replace keyboard interrupt
+	mov	R0, @#300
+	
+	mov     #7, @#177026	; ? disable planes 0,1,2 ?
+	
+	; construct lines table
+	
+	mov	PC, R0
+	add	#PPLIN1-., R0
+	add	#10, R0		; align addr with 8. bytes
+	bic	#7, R0
+
+	; first 18 lines are not needed but we put there valid vaddrs to cycle table
+	mov	#152140, R1	; vaddr of bottom lines
+	; 1st element - set palette (YRGB YRGB YRGB YRGB)
+	mov	#130260, (R0)+	; colors for: 011 010 001 000 (def: 135230)
+	mov	#130260, (R0)+	; colors for: 111 110 101 100 (def: 177334)
+	mov	R1, (R0)+	; vaddr
+	mov	R0, (R0)	; next element addr
+	add	#2, (R0)
+	bis	#2, (R0)+	; #2 = 010 - next element is scale&cursor
+	; 2nd line - set scale, lumi and cursor
+	mov	#^B0000000000010000, (R0)+ ; no cursor
+	mov	#^B0000000000010111, (R0)+ ; 320x288, max luminance
+	add	#80., R1	; next vaddr
+	mov	R1, (R0)+	; put vaddr
+	mov	R0, (R0)
+	add	#2, (R0)+	; next element is 2-words
+	; 2 rows are already set - so it's 16 here
+	mov	#16., R5
+	mov	R0, R2
+10$:	add	#4, R2		; next element addr
+	add	#80., R1	; next vaddr
+	mov	R1, (R0)+	; vaddr
+	mov	R2, (R0)+	; next element addr
+	sob	R5, 10$
+	; 'main' 270 lines array
+	mov	#270., R5
+	mov	#100000, R1	; top line vaddr
+20$:	add	#4, R2
+	mov	R1, (R0)+
+	mov	R2, (R0)+
+	add	#80., R1
+	sob	R5, 20$
+	; cycle vlines to beginning to save some bytes (beginning is already set to valid vram)
+	dec	R0
+	dec	R0
+	mov	PC, R2
+	add	#PPLIN1-., R2
+	add	#10, R2		; even 8. bytes
+	bic	#7, R2
+	bis	#6, R2		; palette
+	mov	R2, (R0)	; cycle them
+
+	; set new lines table
+	mov	@#270, BKW270
+	mov	@#272, BKW272
+	clr	@#270
+	mov	R2, @#272
+	
+	; clear planes
+	call	PPCLRV
+
+	; draw progress bar
+	mov	#126264, @#177010
+	mov	#10., R0
+41$:	movb	#^B00000001, @#177012
+	add	#31., @#177010
+	movb	#^B10000000, @#177012
+	add	#49., @#177010
+	sob	R0, 41$
+	mov	#126264, @#177010
+	mov	#32., R0
+42$:	movb	#377, @#177012
+	add	#720., @#177010
+	movb	#377, @#177012
+	sub	#719., @#177010
+	sob	R0, 42$
+	; draw 'loading'
+	mov	#125204, @#177010
+	mov	PC, R0
+	add	#PPSPR1-., R0
+	mov	#6, R3
+43$:	movb	(R0)+, @#177012
+	inc	@#177010
+	movb	(R0)+, @#177012
+	inc	@#177010
+	movb	(R0)+, @#177012
+	inc	@#177010
+	movb	(R0)+, @#177012
+	add	#77., @#177010
+	sob	R3, 43$
+
+	; queue process
+	mov	PC, R0		; get proc addr
+	add	#PPPGM1-., R0	;
+	mov	R0, ADPGM1	; save for later use
+	mov	R0, @#7124	; 7104 .. (- 7126 - proc addrs
+	mov	#1, @#7100	; 7060 - 7102 - proc state (1 - run, 0 - stop)
+
+	; set 'ppu phase 1 ready'
+	mov	#PPSYIN/2, @#177010
+	mov	#01, @#177014
+	
+	return
+
+; 'empty' interrupt
+INTER1:	rti
+
+; 'backup' values
+BKW270:	.WORD	0
+BKW272:	.WORD	0
+BKW300:	.WORD	0
+
+; lines table data
+PPLIN1:	.BLKW	1200		; need only 1104 (580.) words, but for .even 10 and whatever
+
+; 'loading'
+PPSPR1:	.BYTE	^B01100001, ^B11001100, ^B00101001, ^B00011001
+	.BYTE	^B10010001, ^B01010010, ^B00101010, ^B00100101
+	.BYTE	^B10010001, ^B01010010, ^B01101010, ^B00000101
+	.BYTE	^B10010001, ^B01011110, ^B10101010, ^B00110101
+	.BYTE	^B10010001, ^B01010010, ^B00101010, ^B00100101
+	.BYTE	^B01101111, ^B11010010, ^B00101001, ^B00011001
+	
+; PPU process - drawing 'progress'
+;
+ADPGM1:	.WORD	0			; address of process
+;
+PPPGM1:	mov	R0, -(SP)
+	;	
+	mov	#PPSYIN/2, @#177010	; control word addr
+	cmp	#00, @#177014		; need abort?
+	beq	PPPGM2
+	;
+	mov	#LOAC02/2, @#177010	; need update progress?
+	tst	@#177014
+	beq	20$
+        ; update progress
+	mov	#LOAA02/2, @#177010	; get percentage (0..31?)*256
+	mov	@#177014, R0            ;
+        clrb    R0
+        swab    R0
+        bic     #^B11100000, R0         ; R0 <- 1..32 (to be sure)
+        inc     R0
+        ; draw row R0 x 8
+        mov     #126404, @#177010
+10$:	bisb	#^B10101010, @#177012	; draw on plane 0
+	add	#80., @#177010
+	bisb	#^B01010101, @#177012
+	add	#80., @#177010
+	bisb	#^B10101010, @#177012
+	add	#80., @#177010
+	bisb	#^B01010101, @#177012
+	add	#80., @#177010
+	bisb	#^B10101010, @#177012
+	add	#80., @#177010
+	bisb	#^B01010101, @#177012
+	add	#80., @#177010
+	bisb	#^B10101010, @#177012
+	add	#80., @#177010
+	bisb	#^B01010101, @#177012
+        sub     #<7.*80.-1>, @#177010   ; next row
+        dec     R0
+        bgt     10$
+        ;
+	mov	#LOAC02/2, @#177010	; clear 'need update progress'
+	clr	@#177014
+20$:	; 
+        ; test for secon phase
+	mov	#PPSYIN/2, @#177010	; control word addr
+	cmp	#20, @#177014		; need second phase?
+	beq	PPUST2
+
+	mov	ADPGM1, @#7124		; re-queue process
+	mov	#1, @#7100		; ask for execution
+        ;
+	mov	(SP)+, R0
+	jmp	@#174170		; jump to process dispatcher
+
+; abort PPU
+PPPGM2:	clr	@#177026		; enable planes 0,1,2
+	call	PPCLRV			; clear vram
+	mov	BKW270, @#270		; restore lines table addr
+	mov	BKW272, @#272
+	mov	BKW300, @#300		; restore kbd interrupt
+	clr	@#7100			; do not execute process again
+	jmp	@#174170		; jump to process dispatcher
+
+; clear vram
+PPCLRV:	mov	R0, -(SP)
+	mov	R3, -(SP)
+	mov	R4, -(SP)
+	mov	R5, -(SP)
+	mov	#177010, R0
+	mov	#177012, R4
+	mov	#177014, R5
+	mov	#100000, (R0)
+	mov	#55000, R3
+30$:	clrb	(R4)
+	clr	(R5)
+	inc	(R0)
+	sob	R3, 30$
+	mov	(SP)+, R5
+	mov	(SP)+, R4
+	mov	(SP)+, R3
+	mov	(SP)+, R0	
+	return
+	
+
+; // PPU second phase //////////////////////////////////////////////////////////
+;
+PPUST2:	; set PSW (HP**TNZVC) = 110000000 (HP=11, disable interrupts, halt mode)
+	mtps	#200
+	call	@7132(R0)		; stop FD
+	mov	#1000, SP		; stack is 540..1000
+	mov	#361, @#177054		; set ROM banks as VRAM
+
+	; set temporary lines table from #77760
+	mov	#100000, R0	; clear 1 line of plane 0
+	mov	#120/2, R3
+	clr	(R0)+
+	sob	R3, .-2
+	; need 96. (140) bytes, 16. for lines table, 80. for 1-line vaddr
+	mov	#77760, R0
+	mov	#^B0000000000000000, (R0)+
+	mov	#^B0000000000000000, (R0)+
+	mov	#100000, (R0)+	; one-line empty vaddr
+	mov	#77772, (R0)+	; next entry | 2
+	mov	#^B0000000000010000, (R0)+ ; no cursor
+	mov	#^B0000000000010111, (R0)+ ; 320x288, max luminance
+	mov	#100000, (R0)+	; same one-line vaddr
+	mov	#77766, (R0)+	; cycle them
+	clr	@#270
+	mov	#77766, @#272
+	
+	; relocate some code to #77600 addr
+	mov	PC, R4			;
+	add	#PPURE0-., R4		; start -> R4
+	mov	#77600, R5		; move to -> R5
+	mov	#<PPURE1-PPURE0/2>, R3	; words count
+1$:	mov	(R4)+, (R5)+
+	sob	R3, 1$
+	
+	jmp	@#77600			; to there
+	
+; .=77600 (WARNING! CODE SIZE MUST NOT EXCEED 160(8) BYTES)
+; VRAM -> PPU RAM
+;
+PPURE0: mov     #100010, R0             ; vram CPU+PPU starting addr
+        mov     #100003, @#177010       ; 03 (+06) - CPU code length in words
+        add     @#177014, R0            ; add CPU code length
+        inc     @#177010                ; 04 (+10) - PPU dest addr
+        mov     @#177014, R5
+        mov     R5, R4                  ; PPU starting addr -> R4
+        inc     @#177010                ; 05 (+12) - PPU code length in words
+        mov     @#177014, R3
+	mov	R0, @#177010	        ; starting PPU vaddr
+1$:	mov	@#177014, (R5)+		; from planes 1&2 -> dest
+	inc	@#177010
+	sob	R3, 1$	
+	mov	#PPSYIN/2, @#177010	; set 'ppu phase 2 ready'
+	mov	#02, @#177014		; 
+	jmp	(R4)                    ; START MAIN PPU CODE
+PPURE1:
+	
+PPUEND:
+
+; // END PPU CODE //////////////////////////////////////////////////////////////
+
+	.END	START

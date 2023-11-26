@@ -1,0 +1,4320 @@
+	.TITLE	KRKCPU
+	.ENABL	LC
+	.ASECT
+	.=2000
+
+; WARNING! CUSTOM LINKER (!) DO NOT USE MACROSES
+; WAICLC ~2220 max
+	
+START:	mtps	#200		; PSW - HP**TNZVC (010000000)
+	; disable serial adapter interrupts
+	;bic	#100, @#176560	; network, input
+	;bic	#100, @#176564	; network, output
+	;bic	#100, @#176570	; rs-232, input
+	;bic	#100, @#176574	; rs-232, output
+	; trap register, disable interrupts
+	;mov	#0, @#176644
+	; set first 512 bytes (interrupts table)
+	clr	R0
+	mov	#207, (R0)+	; @#0 = 207 (return)
+	clr	(R0)+
+	mov	#127., R2
+	mov	#RTIADR, (R0)+	; [#RTIADR, 0] - all other interrupts
+	clr	(R0)+
+	sob	R2, .-6
+	; clean second 512 bytes and set stack there
+	mov	#256., R2	
+	clr	(R0)+
+	sob	R2, .-2	
+	mov	#2000, SP
+	; clear planes 1&2
+	call	CLRSC1
+	; cleanup upper RAM
+	mov	#END, R0
+	mov	#160000-END, R2
+	clc
+	ror	R2
+	clr	(R0)+
+	sob	R2, .-2
+
+	; ask for 'ppu phase 3'
+	clr	CMDBUF
+	mov	#30, PPUYYY
+        ; wait for ackn of phase 3
+        cmp     #03, PPUYYY
+        bne     .-6         
+
+	mov	#VSYNI, @#100	; vsync interrupt
+	mtps	#0
+	
+	; all set - start main code
+	clr	CURMOD
+
+; //////////////////////////////////////////////////////////////////////////////
+; // MAIN
+; //////////////////////////////////////////////////////////////////////////////
+
+MAINCY:	call	WAITCY		; vsync wait cycle
+	call	DBGINF		; debug info
+	; key UST - pause
+	tst	KEYHLT
+	beq	25$
+	clr	KEYHLT
+	com	PAUSE
+25$:	tst	PAUSE
+	bne	MAINCY
+	; run procedures
+	mov	CURMOD, R0
+	asl	R0
+	call	@MAINCT(R0)
+	jmp	MAINCY
+	
+MAINCT:	.WORD	MAINC0, MAINC1, MAINC2, MAINC3, MAINC4, MAINC5, MAINC6
+	.WORD	MAINC7, MAINC8
+
+; main menu prepare
+MAINC0:	call	CLRSCR		; clear screen
+	mov	#13., R1	; draw logo
+	mov	#60., R2
+	mov	#CMEN01, R0
+	call	SPRCXX
+	; print menu buttons
+	mov	#STR001, R0	; space - start
+	mov	#10., R1
+	mov	#100., R2
+	call	FN2PRT
+	mov	#STR002, R0	; colors - rgb
+	mov	#14., R1
+	mov	#116., R2
+	call	FN2PRT
+	mov	#STR003, R0	; ball - slow
+	mov	#14., R1
+	mov	#132., R2
+	call	FN2PRT
+	; others opened with combo
+	tst	MENEXT		
+	beq	10$
+	mov	#STR004, R0
+	mov	MENEXT, R1
+	asl	R1
+	mov	MENXT1(R1), R1
+	add	#13., R1
+	mov	#152., R2
+	call	FN1PRT
+	mov	#STR005, R0
+	mov	MENEXT, R1
+	asl	R1
+	mov	MENXT2(R1), R1
+	add	#13., R1
+	mov	#160., R2
+	call	FN1PRT
+	; print usage
+10$:	mov	#STR020, R0
+	mov	#10., R1
+	mov	#180., R2
+	call	FN1PRT
+	; do we have a mouse?
+	mov	#14., R1
+	mov	#188., R2
+	mov	#STR021, R0
+	tst	CNOMOU
+	bne	12$
+	mov	#STR025, R0
+12$:	call	FN1PRT
+	;
+	mov	#STR022, R0
+	mov	#14., R1
+	mov	#196., R2
+	call	FN1PRT
+	mov	#STR023, R0
+	mov	#15., R1
+	mov	#204., R2
+	call	FN1PRT
+	mov	#STR024, R0
+	mov	#16., R1
+	mov	#212., R2
+	call	FN1PRT
+	; update 'on/off' / rgb/grb
+	call	MMEUPD
+	; music command
+	mov	#13., R5	; 13. - start tune
+	mov	#1., R0		; ID = 1
+	call	CMDEXE	
+	;
+	mov	#STR030, SCRL00	; scrolling text addr	
+	clr	KEYSPC		; clear 'space key' state
+	mov	#1, CURMOD	; set main menu mode
+	return
+
+; main menu
+MAINC1:	tst	KEYSPC		; space pressed?
+	beq	10$
+	clr	KEYSPC
+	mov	#1, LEVEL
+	mov	#0, SCORE
+	mov	#20., LIVES
+	mov	#2, CURMOD	; set play prepare
+	return
+10$:	tst	KEYK1		; K1 pressed?
+	beq	12$
+	clr	KEYK1
+	call	CLRSCR
+	mov	#177777, DBGMOD
+	mov	#13., R5	; 13. - music proc
+	mov	#0, R0		; 0 - stop
+	call	CMDEXE	
+	mov	#15., R5	; 15. - note proc
+	call	CMDEXE
+	mov	#7., CURMOD	; set music test
+	return
+12$:	call	SCROLT
+	; ext menu
+	cmp	MENEXT, #1
+	blos	15$
+	mov	#STR004, R0
+	mov	MENEXT, R1
+	mov	MENXT1(R1), R1
+	add	#13., R1
+	mov	#152., R2
+	call	FN1PRT
+	mov	#STR005, R0
+	mov	MENEXT, R1
+	mov	MENXT2(R1), R1
+	add	#13., R1
+	mov	#160., R2
+	call	FN1PRT
+	dec	MENEXT
+	cmp	MENEXT, #1
+	bne	15$
+	call	MMEUPD	
+15$:	; menu keys
+	; CCC-COMBO!
+	tst	MENEXT
+	bne	19$
+	tst	KEYCOM
+	beq	19$
+	clr	KEYCOM
+	mov	#30., MENEXT
+	; KEY 1
+19$:	tst	KEY1
+	beq	20$
+	clr	KEY1
+	com	PALRGB
+	call	PALUPD
+	call	MMEUPD
+	br	99$
+20$:	tst	KEY2
+	beq	25$
+	clr	KEY2
+	com	BALSPD
+	call	MMEUPD
+	br	99$
+25$:	tst	MENEXT		; only for extended menu
+	beq	99$
+	tst	KEY3
+	beq	30$
+	clr	KEY3
+	com	CHEATS
+	call	MMEUPD
+	br	99$
+30$:	tst	KEY4
+	beq	99$
+	clr	KEY4
+	com	DBGMOD
+	call	MMEUPD
+99$:	return
+
+; play prepare
+MAINC2:	mov	#13., R5	; 13. - music proc
+	clr	R0		; 0 - stop it
+	call	CMDEXE
+	; load level
+	call	LOALEV
+	mov	#3, CURMOD	; set play mode
+	cmp	LEVEL, LEVEND
+	bne	99$
+	; last game level
+	mov	#19., R5	; 19. - procedural tune
+	call	CMDEXE
+	; R0 - color, R1,R2 - x8,y, R3,R4 - dx,dy
+	clr	R0
+	mov	#15., R1
+	mov	#135., R2
+	mov	#10., R3
+	mov	#24., R4
+	call	FILLKB
+10$:	tst	CMDBUF		; check commands buffer
+	beq	80$
+	mov	#STR040, R0	; 'get ready!'
+	mov	#15., R1
+	mov	#140., R2
+	call	FN2PRT
+	mov	#100000, R3
+20$:	nop
+	nop
+	nop
+	sob	R3, 20$
+	mov	#STR041, R0	; 'get ready!'
+	mov	#15., R1
+	mov	#140., R2
+	call	FN2PRT
+	mov	#100000, R3
+30$:	nop
+	nop
+	nop
+	sob	R3, 30$
+	br	10$
+80$:	; redraw lvl
+	clr	R0
+	mov	#15., R1
+	mov	#135., R2
+	mov	#10., R3
+	mov	#24., R4
+	call	FILLKB
+	call	DRAWCB
+99$:	return
+
+; play mode
+MAINC3:	; ppu commands ~ 2114
+	call	CMDWAI		; wait for PPU
+	call	SNDSTA		; sound effect commands
+	call	FBCLEA		; clear framebuffer
+	call	BATDRW		; draw the bat
+	call	BATDR2		; draw npc bat if needed
+	call	LOSTDR		; drawing lost state
+	call	BALLDR		; draw ball
+	call	NPCDRA		; draw npc
+	call	FBMOVE		; move framebuffer to screen
+	call	PRINSC		; (maybe) draw score
+	call	PRINLV		; (maybe) draw level and lives
+	call	CMDFIN		; set execute in PPU flag
+	; process elements
+	call	LOSTDO		; lost state processing
+	call	BATDO		; process bat
+	call	NPCDO		; process npc
+	call	NPCSPA		; spawn npc
+	call	BALLDO		; process ball moving
+	call	KEFFDO		; block effects
+	; stop key - exit to main menu
+	tst	KEYSTP
+	beq	.+12
+	mov	#0., CURMOD
+	return
+	; key1 - next lvl (only with ext menu)
+	tst	MENEXT
+	beq	20$
+	tst	KEY1
+	beq	20$
+	clr	KEY1
+	cmp	LEVEL, LEVEND
+	bhis	20$
+	inc	LEVEL
+	mov	#2., CURMOD
+	return
+20$:
+	call	TESTLE		; test for level end
+	return
+
+; live lost
+MAINC4:	call	CLRSCR
+	call	DEFCOO
+	call	CLRNPC
+	call	DRAWCB
+	mov	#3, CURMOD
+	return
+
+; game over prepare
+MAINC5:	mov	#CSP002, R0
+	mov	#15., R1
+	mov	#126., R2
+	call	SPRCXX
+	cmp	SCORE, HSCORE
+	blos	1$
+	mov	SCORE, HSCORE
+1$:	mov	#6, CURMOD
+	return
+
+; game over
+MAINC6:	tst	KEYSPC		; space pressed?
+	beq	1$
+	clr	KEYSPC
+	mov	#0, CURMOD	; set main menu mode
+1$:	return
+
+; music test
+MAINC7:	tst	KEYK1
+	beq	1$
+	clr	KEYK1
+	mov	#0, CURMOD
+1$:	tst	KEY1
+	beq	10$
+	clr	KEY1
+	sub	#10, MUSNOT
+	call	MUSCHG
+	return
+10$:	tst	KEY2
+	beq	11$
+	clr	KEY2
+	add	#10, MUSNOT
+	call	MUSCHG
+	return
+11$:	tst	KEYUP
+	beq	12$
+	clr	KEYUP
+	inc	MUSNOT
+	call	MUSCHG
+	return
+12$:	tst	KEYDWN
+	beq	13$
+	clr	KEYDWN
+	dec	MUSNOT
+	call	MUSCHG
+13$:	return
+
+; you win - prepare
+MAINC8:	mov	#CSP003, R0
+	mov	#14., R1
+	mov	#126., R2
+	call	SPRCXX
+	cmp	SCORE, HSCORE
+	blos	1$
+	mov	SCORE, HSCORE
+1$:	mov	#6, CURMOD	; same as game over - wait for space
+	return
+
+	
+; //////////////////////////////////////////////////////////////////////////////
+; // UTILS, DEBUG, ETC
+; //////////////////////////////////////////////////////////////////////////////
+
+; wait cycle
+WAITCY:	inc	WAICL0
+	tst	VSY1CN
+	beq	WAITCY
+	clr	VSY1CN
+	inc	FRAMCN
+	mov	WAICL0, WAICLC
+	clr	WAICL0
+	return
+
+; debug info
+DBGINF:	tst	DBGMOD
+	bne	1$
+	return
+1$:	bit	#^B1111, FRAMCN	; once in 16 frames
+	beq	2$
+	return
+2$:;	mov	KEYCUR, R0	; pressed/released key
+;	mov	#2., R1
+;	mov	#16., R2
+;	call	SPRBW4
+	mov	DBG002, R0	; ball pos inside bat
+	mov	#2., R1
+	mov	#22., R2
+	call	SPROW4
+;	mov	MUSNOT, R0	; music note in note test
+;	mov	#6., R1
+;	mov	#22., R2
+;	call	SPROW4	
+;	mov	RTICNT, R0	; ints count
+;	mov	#10., R1
+;	mov	#22., R2
+;	call	SPROW4
+;	mov	RTICN2, R0
+;	mov	#14., R1
+;	mov	#22., R2
+;	call	SPROW4
+;	mov	#17., R5	; refresh RTICN2 command
+;	call	CMDEXE
+	mov	WAICLC, R0
+	mov	#18., R1
+	mov	#22., R2
+	call	SPROW4
+	return
+
+; change pp timer
+MUSNOT:	.WORD	956.
+MUSCHG:	mov	MUSNOT, R0
+	mov	#14., R5
+	call	CMDEXE
+	return
+	
+; //////////////////////////////////////////////////////////////////////////////
+; // COMMON
+; //////////////////////////////////////////////////////////////////////////////
+
+; wait for queue complete
+CMDWAI:	tst	CMDBUF		; check commands buffer
+	bne	.-4		; still not ready
+	mov	#CMDBUF+2, CMDADR
+	return
+
+; ask PPU to process command buffer
+CMDFIN:	mov	#1, CMDBUF
+	return
+	
+; add command to PPU queue, R5-command, R0..R4 params
+CMDADD:	mov	R0, TEMPR0
+	mov	CMDADR, R0
+	mov	R5, (R0)+	; command
+	mov	TEMPR0, (R0)+	; parameters
+	mov	R1, (R0)+
+	mov	R2, (R0)+
+	mov	R3, (R0)+
+	mov	R4, (R0)+
+	clr	(R0)
+	mov	R0, CMDADR
+	return
+
+; execute command in PPU, R5-command, R0..R4 params
+CMDEXE:	call	CMDWAI
+	call	CMDADD
+	call	CMDFIN
+	return
+
+; clear framebuffer command
+FBCLEA:	mov	#8., R5
+	call	CMDADD
+	return
+	
+; move framebuffer command
+FBMOVE:	mov	#9., R5
+	call	CMDADD
+	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // MENU
+; //////////////////////////////////////////////////////////////////////////////
+
+MMEUPD:	; colors - rgb|grb
+	mov	#STR014, R0
+	mov	#26., R1
+	mov	#116., R2
+	tst	PALRGB
+	bne	10$
+	mov	#STR015, R0
+10$:	call	FN2PRT
+	; ball - slow|norm
+	mov	#STR016, R0
+	mov	#26., R1
+	mov	#132., R2
+	tst	BALSPD
+	beq	20$
+	mov	#STR017, R0
+20$:	call	FN2PRT
+	tst	MENEXT		; others opened with combo
+	beq	99$
+	
+	; cheats on|off
+	mov	#STR010, R0
+	mov	MENEXT, R1
+	asl	R1
+	mov	MENXT1(R1), R1
+	add	#25., R1
+	mov	#152., R2
+	tst	CHEATS
+	beq	30$
+	mov	#STR011, R0
+30$:	call	FN1PRT
+	; debug on|off
+	mov	#STR010, R0
+	mov	MENEXT, R1
+	asl	R1
+	mov	MENXT2(R1), R1
+	add	#25., R1
+	mov	#160., R2
+	tst	DBGMOD
+	beq	40$
+	mov	#STR011, R0
+40$:	call	FN1PRT
+99$:	return
+
+PALUPD:	mov	#16., R5
+	mov	PALRGB, R0
+	call	CMDEXE
+	return	
+	
+; //////////////////////////////////////////////////////////////////////////////
+; // LEVEL / FIELD
+; //////////////////////////////////////////////////////////////////////////////
+
+LEVADR:	.WORD	0
+
+; load level, LEVEL - num
+LOALEV:	; common init
+	clr	TESTL1		; test for level end countdown
+	; level addr
+	mov	LEVEL, R0
+	asl	R0
+	mov	LEVTBL(R0), LEVADR
+	; cleanup planes and ppu ram
+	call	CLRSCR	
+	mov	#4., R5		; 4. - clear upper PPU RAM
+	call	CMDEXE	
+	; commands to load default sprites
+	call	CMDWAI
+	mov	#DEFSPR, R4
+10$:	mov	(R4)+, 	R0	; R0 <- spr ID
+	beq	20$
+	mov	R0, R1
+	asl	R1
+	mov	SPRTBL(R1), R1	; R1 <- addr in CPU
+	mov	#1., R5		; 1. - load and preshift 16x16
+	call	CMDADD
+	br	10$
+20$:	; level sprites
+	mov	LEVEL, R0
+	asl	R0
+	mov	LEVSPT(R0), R4
+22$:	mov	(R4)+, R0
+	beq	24$
+	mov	R0, R1
+	asl	R1
+	mov	SPRTBL(R1), R1	; addr in CPU
+	mov	#1., R5		; cmd #1 - load and preshift 16x16
+	call	CMDADD
+	br	22$
+24$:	; exec load commands
+	call	CMDFIN	
+	; clear npc's
+	call	CLRNPC
+	; clear npc spawn pool, 14. npc's spawn pools
+	mov	#NPSPAT, R0
+	mov	#14., R3
+	clr	(R0)+
+	clr	(R0)+
+	clr	(R0)+
+	sob	R3, .-6
+	mov	#NPSPAT, NPSPAD
+	; clear current power-ups
+	mov	#POWERC, R0
+	mov	#32., R3
+	clr	(R0)+
+	sob	R3, .-2
+	; empty addr - end of levels?
+	tst	LEVADR
+	bne	29$
+	return
+29$:	; clear kub effects
+	call	KEFCLR
+	; copy lvl 16 x 12 blocks
+	mov	LEVADR, R4
+	mov	#LEVELC, R5
+	mov	#0, R2		; y-block
+30$:	mov	#0, R1		; x-block
+31$:	movb	(R4)+, R0
+	bic	#^B1111111100000000, R0
+	bit	#^B11000000, R0	; test for npc generator
+	beq	32$
+	; npc generator
+	bic	#^B11000000, R0
+	mov	R0, @NPSPAD	; type
+	add	#2, NPSPAD
+	mov	R1, @NPSPAD	; x-block addr
+	add	#2, NPSPAD
+	mov	R2, @NPSPAD	; y-block addr
+	add	#2, NPSPAD
+	clr	R0
+	br	33$
+32$:	; block power
+	mov	R0, R3
+	bit	#^B00110000, R3	; do not use non-collidable
+	bne	33$
+	add	#BGOPWR, R3	;
+	movb	(R3), R3	; R3 <- power
+	ash	#6, R3		; shift to upper 2 bits
+	bis	R3, R0
+33$:	movb	R0, (R5)+	; set to current level
+	inc	R1
+	cmp	R1, #16.	; cycle by x
+	blo	31$
+	inc	R2
+	cmp	R2, #12.	; cycle by y
+	blo	30$	
+	; current power-ups
+	call	PWRCRE
+	; if we have cheats
+	clr	RHTWAL
+	clr	RHWCNT
+	tst	CHEATS
+	beq	40$
+	mov	#177777, RHTWAL
+	mov	#177777, RHWCNT
+	call	RHWCRE
+40$:	; set initial npc spawn addr
+	mov	#NPSPAT, NPSPAD
+	sub	#6, NPSPAD	; must be set 'before' first element
+	; default ball and bat coords
+	call	DEFCOO
+	; draw current level
+	call	DRAWCB
+	; clear keys
+	clr	KEYSPC
+	clr	KEYUP
+	clr	KEYDWN
+	clr	KEYHLT
+	clr	KEYSTP	
+	call	CMDWAI		; wait for 'ppu ready'
+	return
+
+PWRCR0:	.BLKW	16.
+PWRCR1:	.BLKW	16.
+
+; create current power-ups	
+PWRCRE:	; p-ups addrs
+	mov	LEVADR, R4
+	sub	#16., R4	
+	; byte->word copy pwr-up types
+	mov	#PWRCR0, R0
+	mov	#16., R3
+	movb	(R4)+, (R0)+	
+	inc	R0
+	sob	R3, .-4
+	; clear k-addrs
+	mov	#PWRCR1, R0
+	mov	#16., R3
+	clr	(R0)+
+	sob	R3, .-2
+	; copy =2 block addrs
+	clr	R5
+	clr	R2
+	mov	#192., R3
+10$:	movb	LEVELC(R5), R1
+	bic	#^B1111111111000000, R1	; without block strength
+	cmp	R1, #2.		; only use =2 blocks for p-ups
+	bne	20$
+	mov	R5, PWRCR1(R2)
+	inc	R2
+	inc	R2
+	cmp	R2, #32.	; out of k-addr array size
+	bhis	30$
+20$:	inc	R5
+	sob	R3, 10$
+30$:	; shuffle them
+	mov	#PWRCR0, R0
+	call	SHF16W
+	mov	#PWRCR1, R0
+	call	SHF16W
+	; squeeze them
+	mov	#PWRCR0, R0
+	call	SQU16W
+	mov	#PWRCR1, R0
+	call	SQU16W
+	; populate POWERC
+	mov	#PWRCR0, R0	; types
+	mov	#PWRCR1, R1	; k-addrs
+	mov	#POWERC, R5	; resulting array of [type, kaddr]
+	mov	#16., R3
+40$:	mov	(R0)+, (R5)+
+	mov	(R1)+, (R5)+
+	sob	R3, 40$
+	return
+
+; right wall create
+RHWCRE:	mov	#LEVELC, R4
+	add	#16., R4
+	mov	R4, R5
+	add	#15., R5
+	mov	#10., R3
+1$:	movb	(R4), (R5)
+	add	#16., R4
+	add	#16., R5
+	sob	R3, 1$
+	return
+
+; redraw right wall
+RHWDRA:	mov	#LEVELC, TEMPR5
+	add	#<15.+16.>, TEMPR5
+	mov	#10., TEMPR3
+1$:	mov	TEMPR5, R5
+	call	KUDRAW
+	add	#16., TEMPR5
+	dec	TEMPR3
+	bne	1$
+	return
+
+; draw current background
+DRAWCB:	clr	TEMPR0
+	mov	#192., TEMPR3
+1$:	mov	TEMPR0, R5
+	call	KUDRAW
+	inc	TEMPR0
+	dec	TEMPR3
+	bne	1$
+	mov	#STR013, R0	; print 'score'
+	mov	#7., R1
+	mov	#34., R2
+	call	FN2PRT
+	mov	#STR012, R0	; print 'level'
+	mov	#20., R1
+	mov	#34., R2
+	call	FN2PRT
+	mov	#CSP001, R0
+	mov	#30., R1	; draw small bat (lives)
+	mov	#34., R2
+	call	SPRCXX
+	mov	#1, SCORCH	; need draw score
+	mov	#1, LIVECH	; need draw lives
+	return
+
+; draw one block R5 - k-addr
+KUDRAW:	movb	LEVELC(R5), R0
+	bic	#^B1111111111000000, R0
+	beq	99$
+	asl	R0
+	mov	BGOTBL(R0), R0	; spr addr -> R0
+	mov	R5, R1
+	bic	#^B1111111111110000, R1
+	asl	R1		;
+	add	#4., R1		; x(8pix) -> R1
+	mov	R5, R2		;
+	bic	#^B1111, R2	;
+	add	#48., R2	; y -> R2
+	call	SPRC16	
+99$:	return
+
+
+; ask to center mouse in PPU
+CTRMOU:	mov	BATY, R2
+	mov	R2, CMOUSY
+	mov	#20., R5
+	call	CMDEXE	
+	return
+
+
+; default ball and bat coords and modes
+DEFCOO:	; ball
+	mov	#202., R1
+	mov	#88., R2
+	swab	R1
+	swab	R2
+	mov	R1, BALX
+	mov	R2, BALY
+	mov	#60., BALANG	; <- angle
+	mov	#03., BALVEL
+	mov	#12., BALBAT
+	tst	BALSPD
+	beq	10$
+	mov	#04., BALVEL
+10$:
+	; bat
+	clr	BALVCN
+	mov	#216., BATX
+	mov	#96., BATY
+	mov	#8., BATDY
+	mov	#1., BATVEL
+	clr	BATINE
+	mov	#2., BATMOD	; 'glued' mode
+	clr	BATSUB		; submode
+	clr	BATPRZ		; paralyzation counter
+	; from glued bat
+	mov	BATY, R0
+	sub	BATDY, R0
+	sub	#4., R0
+	sub	#8., R0
+	add	BALBAT, R0
+	swab	R0
+	mov	R0, BALY
+	; other
+	clr	LOSTCN		; we are alive
+	; if we have mouse - set mouse Y
+	call	CTRMOU
+	return
+
+; draw score
+PRINSC:	tst	SCORCH		; do we need to redraw?
+	bne	1$
+	return
+1$:	clr	SCORCH
+	cmp	SCORE, #50000.	; tst for maximal score
+	blos	2$
+	mov	#50000., SCORE
+2$:	mov	#3., R5		; 3. - draw decimal word
+	mov	SCORE, R0	; num
+	mov	#13., R1	; x8
+	mov	#34., R2	; y
+	call	CMDADD
+	return
+
+; draw lvl & lives
+PRINLV:	tst	LIVECH
+	bne	1$
+	return
+1$:	clr	LIVECH
+	; lvl
+	mov	#5., R5		; 5. - print 00..99
+	mov	LEVEL, R0	; num
+	mov	#26., R1	; x8
+	mov	#34., R2	; y
+	call	CMDADD
+	; lives
+	mov	#5., R5
+	mov	LIVES, R0
+	mov	#31., R1
+	mov	#34., R2
+	call	CMDADD
+	return
+
+; test for power-ups and convert block to power-up if ok
+PWRTST:	movb	LEVELC(R5), R0
+	; quick check (only =2 block can have p-ups)
+	bic	#^B1111111111110000, R0
+	cmp	R0, #2.		
+	bne	99$
+	; normal check
+	mov	#POWERC, R0
+	mov	#16., R3
+10$:	mov	(R0)+, R1	; type
+	mov	(R0)+, R2	; p-ups k-addr
+	tst	R1
+	beq	20$
+	cmp	R2, R5		; p-ups k-addr == current k-addr ?
+	beq	30$
+20$:	sob	R3, 10$
+	br	99$
+30$:	; found p-ups, R1-type (type is usual block type)
+	bis	#^B01000000, R1	; set power to 1
+	movb	R1, LEVELC(R5)	; write it back
+	sec			; converted
+	return
+99$:	clc			; not converted
+	return
+
+; add 'dissolve' effect, R5-kaddr
+KEFDIS:	mov	#1, R1
+	clr	R2
+	clrb	LEVELC(R5)
+	call	KEFADD
+	return
+
+; hit power up? R5 - kaddr
+HITPWR:	movb	LEVELC(R5), R0
+	bic	#^B1111111111110000, R0
+	; was it E p-up?
+	cmp	R0, #15.
+	bne	10$
+	mov	#4., BATMOD	; extend mode
+	return
+10$:	; was it G p-up?
+	cmp	R0, #14.
+	bne	20$
+	mov	#5., BATMOD	; wait for glued mode
+	return
+20$:	; was it bomb?
+	cmp	R0, #13.
+	bne	99$
+	sub	#17., R5
+	call	KEFDIS
+	inc	R5
+	call	KEFDIS
+	inc	R5
+	call	KEFDIS
+	add	#14., R5
+	call	KEFDIS
+	inc	R5
+	inc	R5
+	call	KEFDIS
+	add	#14., R5
+	call	KEFDIS
+	inc	R5
+	call	KEFDIS
+	inc	R5
+	call	KEFDIS
+	sub	#17., R5
+	return
+99$:	return
+	
+	
+FIELR5:	.WORD	0
+FIELR3:	.WORD	0
+
+; process field
+FIELDO:	tst	LOSTCN		; already lost
+	beq	.+4
+	return
+	tst	NORKUB		; nothing hitted
+	bne	.+4
+	return
+	mov	NORKUB, R5		; k-addr of normal
+	movb	LEVELC(R5), R0
+	bic	#^B1111111100111111, R0	; break power
+	cmp	R0, #^B11000000		; unbreakable
+	beq	20$
+	; hit something
+	sub	#^B01000000,R0		; decrease power
+	movb	LEVELC(R5), R1		; store back power
+	bic	#^B1111111111000000, R1
+	bis	R0, R1
+	movb	R1, LEVELC(R5)
+	tst	R0		; block is broken?
+	beq	30$
+	; add 'highlight' effect
+20$:	mov	#5, SNDNUM
+	mov	#2, R1
+	mov	#0, R2
+	call	KEFADD
+	return
+30$:	; test for power-up
+	call	PWRTST
+	bcc	32$
+	; add 'power up' effect
+	mov	#4, SNDNUM	; sound 4 - 'ta da da'
+	mov	#3, R1
+	mov	#0, R2
+	call	KEFADD
+	return
+32$:	; add 'dissolve' effect
+	mov	#2, SNDNUM	; sound 2 - 'tick'
+	inc	SCORE
+	mov	#1, SCORCH
+	call	HITPWR		; do we broke power up?
+	call	KEFDIS
+	return
+	
+
+KEFFDT:	.WORD	0, KEFFD1, KEFFD2, KEFFD3
+
+; effect 1 - fade out, R2 - subtype
+KEFFD1:	mov	R2, R3		; one sprite for 4 ticks
+	bic	#^B1111111111111100, R3
+	bne	2$
+	asr	R2
+	mov	SKT001(R2), R0
+	tst	R0
+	beq	3$
+	call	KUSPRI
+2$:	mov	KUBEFA, R0	; next tick
+	inc	2(R0)
+	return
+3$:	clr	@KUBEFA		; clear effect
+	call	KCLR16		; clear block
+	return
+
+; effect 2 - hlight
+KEFFD2:	tst	R2		; subtype=0 - max light
+	bne	1$
+	call	KSET17		; hlight
+	br	2$
+1$:	cmp	R2, #6.
+	blo	2$
+	call	KUDRAW		; draw original block
+	clr	@KUBEFA		; remove effect
+	return
+2$:	mov	KUBEFA, R0
+	inc	2(R0)		; next tick
+	return
+
+; effect 3 - power up
+KEFFD3:	mov	R2, R3
+	bic	#^B1111111111111100, R3
+	bne	2$
+	ash	#-2, R2
+	asl	R2
+	mov	SKT003(R2), R0
+	tst	R0
+	beq	3$
+	call	KUSPRI
+2$:	mov	KUBEFA, R0	; next tick
+	inc	2(R0)
+	return
+3$:	clr	@KUBEFA		; clear effect
+	call	KUDRAW		; restore block
+	return
+	
+; process blocks effects
+KEFFDO:	mov	#KUBEFT, KUBEFA	; cycle registered effects
+10$:	mov	KUBEFA, R0
+	mov	(R0), R1	; type
+	beq	80$		; no effect
+	mov	2(R0), R2	; subtype
+	mov	4(R0), R5	; k-addr
+	asl	R1
+	call	@KEFFDT(R1)
+80$:	add	#6, KUBEFA
+	cmp	KUBEFA, #KUBEFE
+	blo	10$
+	return
+
+; kub effects: type, subtype, k-addr
+KUBEFA:	.WORD	0, 0
+KUBEFT:	.BLKW	30.
+KUBEFE:
+
+; clear kub effects
+KEFCLR:	mov	#KUBEFT, R0
+1$:	clr	(R0)+
+	cmp	R0, #KUBEFE
+	blo	1$
+	return
+	
+; add/update field kub effect, R1 - type, R2 - subtype, R5 - k-addr
+KEFADD:	; try find already used k-addr
+	mov	#KUBEFT, R0
+10$:	tst	(R0)
+	beq	14$
+	cmp	4(R0), R5
+	bne	14$
+	mov	R1, (R0)+	; update already used
+	mov	R2, (R0)
+	return
+14$:	add	#6., R0
+	cmp	R0, #KUBEFE
+	blo	10$
+	; try to find free keffect slot
+	mov	#KUBEFT, R0
+20$:	tst	(R0)
+	bne	26$
+	mov	R1, (R0)+
+	mov	R2, (R0)+
+	mov	R5, (R0)
+	return
+26$:	add	#6., R0
+	cmp	R0, #KUBEFE
+	blo	20$
+	; cant find effect slot - just clear kub
+	call	KCLR16
+	return
+	
+TESTL1:	.WORD	0	; counter to test for level end
+
+; test for level end
+TESTLE:	cmp	TESTL1, #50.
+	bhis	6$
+	inc	TESTL1
+	return
+6$:	clr	TESTL1
+	mov	#LEVELC, R5
+	mov	#192., R3
+10$:	movb	(R5)+, R0
+	bic	#^B1111111100000000, R0
+	ash	#-6, R0		; get block power
+	cmp	#1, R0		; 1 or 2 - still can't end level
+	beq	99$		; but not 3 !
+	cmp	#2, R0
+	beq	99$
+	sob	R3, 10$
+	; next level
+	cmp	LEVEL, LEVEND	; max level?
+	bhis	99$
+	inc	LEVEL		; level++
+	mov	#2., CURMOD	; next level prepare
+99$:	return
+	
+; //////////////////////////////////////////////////////////////////////////////
+; // MODES
+; //////////////////////////////////////////////////////////////////////////////
+
+; lost mode processing
+LOSTDO:	tst	LOSTCN
+	bne	10$
+	return
+10$:	inc	LOSTCN
+	cmp	LOSTCN, #150.
+	blo	99$
+	dec	LIVES
+	bpl	95$
+	mov	#5., CURMOD		; game over
+	return
+95$:	mov	#4., CURMOD		; live lost
+99$:	return
+
+; draw lost ball on 2st lost frame
+LOSTDR:	tst	LOSTCN
+	bne	11$
+	return	
+11$:	cmp	LOSTCN, #1.
+	bne	20$
+	; clear ball sprite
+	mov	#1, R4		; it's a ball
+	mov	#11., R5	; 11. - sprite 16x16
+	mov	#27., R0	; ID = #27. (empty)
+	mov	BALX, R1
+	mov	BALY, R2
+	clrb	R1
+	clrb	R2
+	swab	R1
+	swab	R2
+	add	#32., R1	; R1 - x
+	add	#48., R2	; R2 - y
+	call	CMDADD
+20$:	return
+
+; //////////////////////////////////////////////////////////////////////////////
+; // BALL 
+; //////////////////////////////////////////////////////////////////////////////
+	
+BALX:	.BYTE	0, 20.	; floating point, high byte - integer part
+BALY:	.BYTE	0, 20.
+BALANG:	.WORD	64.	; 0 .. 127
+BALVEL:	.WORD	2.
+BALVCN:	.WORD	0	; velocity increase count
+BALBAT:	.WORD	12.	; relative y with bat
+BALSPD:	.WORD	0	; <>0 - faster speed
+
+; draw ball command = 11., 1, X, Y (as a sprite)
+BALLDR:	tst	LOSTCN
+	beq	1$
+	return
+1$:	mov	BALX, R1
+	mov	BALY, R2
+	clrb	R1
+	clrb	R2
+	swab	R1
+	swab	R2
+	add	#32., R1
+	add	#48., R2
+	mov	#11., R5	; 11. - sprite 16x16
+	mov	#1., R0		; ID = 0 (ball)
+	cmp	LEVEL, LEVEND
+	bne	2$
+	mov	#6., R0		; 'pong' ball
+2$:	mov	#1, R4		; #1 -> R4 is a ball, special case for framebuffer
+	call	CMDADD
+	return
+
+; check for ball out
+BALOUT:	mov	BALX, R0
+	clrb	R0
+	swab	R0
+	cmp	R0, #240.	; lost ball?
+	blo	90$
+	mov	#1., BATMOD	; delete bat
+	mov	#1., LOSTCN	; lost countdown
+	sec
+	return
+90$:	clc
+	return
+
+; process 'glued' ball
+BALGLU:	call	GLUTST
+	bcs	10$
+	return			; return with C=0
+10$:	mov	BATY, R0
+	sub	BATDY, R0
+	sub	#4., R0
+	sub	#8., R0
+	add	BALBAT, R0
+	swab	R0
+	mov	R0, BALY
+	mov	#202., R0
+	swab	R0
+	mov	R0, BALX
+	sec
+	return
+
+; ball moving
+BALMOV:	mov	BALANG, ANGLE0
+	mov	BALVEL, VELOCI
+	mov	BALX, OBJECX
+	mov	BALY, OBJECY
+	call	MOVTOB
+	mov	OBJECX, BALX
+	mov	OBJECY, BALY
+	mov	ANGLE0, BALANG	
+	return
+	
+; process ball
+BALLDO:	tst	LOSTCN
+	beq	10$
+	return
+10$:	call	BALOUT
+	bcs	20$
+	call	BALGLU
+	bcs	20$
+	call	BALMOV		; move ball
+	call	FIELDO		; process field
+	; bat deflection
+20$:	mov	BALANG, ANGLE0
+	call	BATCOL
+	call	ANGCOR
+	mov	ANGLE0, BALANG
+	call	BATCON		; npc bat check
+	return
+
+; ball vs npc check, NPCADR - current npc
+BALNCK:	tst	LOSTCN
+	beq	1$
+	return
+1$:	mov	BALX, TEMPX1
+	mov	BALY, TEMPY1
+	mov	BALX, TEMPX2
+	mov	BALY, TEMPY2
+	sub	#10.*256., TEMPX1	; -10 (float)
+	sub	#10.*256., TEMPY1	; -10 (float)
+	add	#10.*256., TEMPX2	; +10 (float)
+	add	#10.*256., TEMPY2	; +10 (float)	
+	mov	NPCADR, R5
+	mov	10(R5), R3		; npc x (float)
+	mov	12(R5), R4		; npc y (float)
+	cmp	R3, TEMPX1
+	blo	99$
+	cmp	R3, TEMPX2
+	bhi	99$
+	cmp	R4, TEMPY1
+	blo	99$
+	cmp	R4, TEMPY2
+	bhi	99$
+	; collided with npc
+	mov	#3, SNDNUM	; sound = 3 (npc boom)
+	; bal is glued - dont change angle
+	call	GLUTST
+	bcs	70$
+	; npc #4. - always ball --> (and inc velocity)
+	cmp	(R5), #4.
+	bne	60$
+	mov	#4, BALANG	; angle = 4
+	call	BALINC
+	br	70$
+60$:	; random ball angle
+	call	RND256
+	cmp	R0, #86.	; ~1/3 chance
+	bhis	70$
+	call	RND256
+	asr	R0		; R0 <- 0..127
+	call	ANGFI2		; fixing some angles
+	mov	R0, BALANG	; new ball angle
+70$:	mov	NPCADR, R5
+	mov	#255., 2(R5)	; state to 255 (dying)
+	clr	4(R5)		; clear substate
+	clr	14(R5)		; clear timers
+	clr	16(R5)	
+	mov	(R5), R0	; get npc score value
+	asl	R0
+	mov	SCORTB(R0), R0
+	add	R0, SCORE	; increase score
+	mov	#1, SCORCH	; need to draw it
+	sec
+	return
+99$:	clc
+	return
+
+; increase ball velocity
+BALINC:	mov	R0, -(SP)
+	mov	#8., R0
+	tst	BALSPD
+	beq	1$
+	mov	#6., R0
+1$:	inc	BALVCN
+	cmp	BALVCN, R0
+	blo	2$
+	clr	BALVCN
+	cmp	BALVEL, #6.
+	bhis	2$
+	inc	BALVEL
+2$:	mov	(SP)+, R0
+	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // BAT 
+; //////////////////////////////////////////////////////////////////////////////
+
+BATX:	.WORD	216.
+BATY:	.WORD	96.
+BATDY:	.WORD	8.
+BATVEL:	.WORD	1.	; bat velocity (max=2)
+BATINE:	.WORD	0.	; bat velocity increase count
+BATPRZ:	.WORD	0.	; bat paralization count
+BATMOD:	.WORD	2.	; modes: 0 - no bat, 1 - lost
+			; 2 - glued 
+			; 3 - normal dy=8, 4 - normal dy=16
+			; 5 - prepare for glued, 6 - glued
+BATSUB:	.WORD	0.	; submode
+
+BATX2:	.WORD	32.
+BATY2:	.WORD	96.
+BATDY2:	.WORD	8.
+
+; bat draw
+BATDRW:	mov	BATX, R1
+	ash	#-3., R1	; x/8 coords
+	mov	BATY, R2
+	add	#4., R1		; R1 <- x8
+	add	#48., R2	; R2 <- y
+	mov	BATDY, R3
+	mov	BATMOD, R4
+	mov	#10., R5	; 10. - draw bat
+	clr	R0		; it's a player's bat
+	cmp	LEVEL, LEVEND
+	bne	10$
+	mov	#18., R5	; 18. - draw pong-style bat
+10$:	call	CMDADD
+	; draw paralyzation
+	tst	BATPRZ
+	bne	80$
+	return
+80$:	mov	BATX, R1
+	add	#28., R1
+	mov	BATY, R2
+	sub	BATDY, R2
+	add	#40., R2
+	cmp	BATPRZ, #1
+	beq	90$
+	mov	#11., R5
+	mov	FRAMCN, R0
+	bic	#^B1111111111110000, R0
+	asr	R0
+	asr	R0
+	asl	R0
+	mov	SPT006(R0), R0
+	clr	R4		; not a ball
+	call	CMDADD
+	return
+90$:	mov	#7., R5		; add to framebuffer
+	mov	#5., R3		; dy
+	call	CMDADD
+	return
+
+; npc bat draw
+BATDR2:	cmp	LEVEL, LEVEND
+	beq	10$
+	return
+10$:	mov	BATX2, R1
+	ash	#-3., R1	; x/8 coords
+	mov	BATY2, R2
+	add	#4., R1		; R1 <- x8
+	add	#48., R2	; R2 <- y
+	mov	BATDY2, R3
+	mov	#3, R4		; mode 3 - normal x8
+	mov	#18., R5	; 18. - draw pong-style bat
+	mov	#1, R0		; it's an NPC bat
+	call	CMDADD
+	return
+
+BATDOT:	.WORD	0, BATDO1, BATDO2, BATDO3, BATDO4, BATDO5, BATDO6
+
+; bat lost
+BATDO1:	bit	#1., FRAMCN		; every 2 frames
+	bne	9$
+	dec	BATDY
+	bne	9$
+	clr	BATMOD
+9$:	return
+	
+; glued from beginning
+BATDO2:	tst	KEYSPC
+	beq	2$
+	clr	KEYSPC
+	mov	#3., BATMOD	; short usual bat
+	cmp	LEVEL, LEVEND
+	bne	1$
+	mov	#4., BATMOD	; long bat
+1$:	clr	BATSUB
+	mov	#1., SNDNUM
+	br	9$
+2$:	inc	BATSUB
+	cmp	BATSUB, #512.
+	blo	9$
+	mov	#3., BATMOD
+	cmp	LEVEL, LEVEND
+	bne	3$
+	mov	#4., BATMOD
+3$:	clr	BATSUB
+	mov	#1., SNDNUM
+9$:	return
+
+; normal 8
+BATDO3:	bit	#1., FRAMCN
+	bne	9$
+	cmp	BATDY, #8.
+	blos	9$
+	dec	BATDY
+9$:	return	
+
+; normal 16
+BATDO4:	bit	#1., FRAMCN
+	bne	9$
+	cmp	BATDY, #16.
+	bhis	9$
+	inc	BATDY
+9$:	return	
+
+; prepare to be glued
+BATDO5:	call BATDO3
+	return
+
+; glued
+BATDO6:	tst	KEYSPC
+	beq	1$
+	clr	KEYSPC
+	mov	#5., BATMOD	; prepare to glued
+	clr	BATSUB
+	mov	#1., SNDNUM
+	br	9$
+1$:	inc	BATSUB
+	cmp	BATSUB, #512.
+	blo	9$
+	clr	BATSUB
+	mov	#5., BATMOD
+	mov	#1., SNDNUM
+9$:	return
+
+	
+; bat process
+BATDO:	; process npc bat
+	cmp	LEVEL, LEVEND
+	bne	2$
+	call	BATDON
+	; 0 - no bat
+2$:	tst	BATMOD
+	bne	10$
+	return
+10$:	mov	BATMOD, R0
+	asl	R0
+	call	@BATDOT(R0)
+	call	BATKDO
+	call	BATCOR
+	return
+
+BATDON:	mov	BALY, R0
+	clrb	R0
+	swab	R0
+	add	#8., R0
+	cmp	BATY2, R0
+	bhi	10$
+	blo	20$
+	br	90$
+10$:	dec	BATY2
+	br	90$
+20$:	inc	BATY2
+90$:	call	BATCO2
+	return
+	
+; bat velocity & keys
+BATKDO:	tst	BATPRZ		; was it paralyzed?
+	beq	8$
+	dec	BATPRZ
+	bne	6$
+	mov	BATY, R2
+	mov	R2, CMOUSY
+	mov	#20., R5
+	call	CMDADD
+6$:	return
+8$:	mov	#1, BATVEL
+	mov	BATINE, R0
+	tst	R0
+	bpl	10$
+	neg	R0
+10$:	cmp	R0, #32.
+	blo	20$
+	inc	BATVEL
+20$:	; mouse?
+	tst	CNOMOU
+	bne	24$
+	mov	CMOUSY, BATY
+	; 	
+24$:	; keyboard actions
+	tst	KEYUP			; up
+	beq	40$
+	sub	BATVEL, BATY
+	tst	BATINE
+	bmi	30$
+	clr	BATINE
+30$:	dec	BATINE			; modify inertion - up
+	br	99$
+40$:	tst	KEYDWN			; down
+	beq	60$
+	add	BATVEL, BATY
+	tst	BATINE
+	bpl	50$
+	clr	BATINE
+50$:	inc	BATINE			; modify inertion - down
+	br	99$
+60$:	tst	BATINE			; nothing pressed
+	beq	99$			; intertion going to -> 0
+	tst	BATINE
+	bmi	70$
+	dec	BATINE
+	br	99$
+70$:	inc	BATINE
+99$:	return
+
+; check & correct bat coords
+BATCOR:	mov	BATY, R0
+	sub	BATDY, R0
+	cmp	R0, #18.
+	bgt	10$
+	mov	#18., BATY
+	add	BATDY, BATY
+10$:	mov	BATY, R0
+	add	BATDY, R0
+	cmp	R0, #173.
+	blt	99$
+	mov	#173., BATY
+	sub	BATDY, BATY
+99$:	return
+
+; check and correct npc bat coords
+BATCO2:	mov	BATY2, R0
+	sub	BATDY2, R0
+	cmp	R0, #18.
+	bgt	10$
+	mov	#18., BATY2
+	add	BATDY2, BATY2
+10$:	mov	BATY2, R0
+	add	BATDY2, R0
+	cmp	R0, #173.
+	blt	99$
+	mov	#173., BATY2
+	sub	BATDY2, BATY2
+99$:	return
+
+
+; check collision with bat, R1,R2 - x,y (in pix)
+; return R0 - dy
+BATCHK:	cmp	R1, TEMPX1
+	blo	99$
+	cmp	R1, TEMPX2
+	bhi	99$
+	cmp	R2, TEMPY1
+	blo	99$
+	cmp	R2, TEMPY2
+	bhi	99$
+	; collided
+	mov	R2, R0
+	sub	TEMPY1, R0
+	sec
+	return
+99$:	clc
+	return
+
+; bat collision processing
+BATCOL:	tst	BATMOD		; bat is lost?
+	bne	1$
+	return
+1$:	call	CLRNOR
+	call	GLUTST		; if glued - don't check
+	bcc	2$
+	return
+2$:	mov	BATY, TEMPY1
+	mov	BATY, TEMPY2
+	sub	BATDY, TEMPY1
+	add	BATDY, TEMPY2
+	sub	#4, TEMPY1
+	add	#4, TEMPY2
+	mov	BATX, R0
+	mov	R0, TEMPX1
+	mov	R0, TEMPX2
+	add	#7., TEMPX2	
+	; check right collision	
+	tst	TSTCRH
+	beq	10$
+	mov	TEMPX, R1
+	mov	TEMPY, R2
+	add	#11., R1
+	add	#8., R2
+	call	BATCHK
+	bcc	10$
+	; collided with left side
+	mov	R0, BALBAT	; ball position in bat
+	asl	R0
+	cmp	BATDY, #8.
+	bhi	6$
+	mov	BNORT1(R0), R0	; use bat normals without retraction
+	br	7$
+6$:	mov	BNORT2(R0), R0
+7$:	mov	R0, ANGLE0
+	call	BALINC		; increase ball velocity
+	; TODO: debug
+	mov	BALBAT, DBG002
+	cmp	BATMOD, #5.	; was it prepare for glued?
+	bne	8$
+	mov	#6., BATMOD
+	return
+8$:	mov	#1, SNDNUM
+	return			; only one collision allowed
+	; check up collision
+10$:	tst	TSTCUP
+	beq	20$
+	mov	TEMPX, R1
+	mov	TEMPY, R2
+	add	#8., R1
+	add	#4., R2
+	call	BATCHK
+	bcc	20$
+	mov	#32., R0	; 'down' normal
+	call	ADDNR0
+	return
+	; check left collision
+20$:	tst	TSTCLF
+	beq	30$
+	mov	TEMPX, R1
+	mov	TEMPY, R2
+	add	#4., R1
+	add	#8., R2
+	call	BATCHK
+	bcc	30$
+	mov	#0., R0		; -> normal
+	call	ADDNR0
+	return
+	; check down collision
+30$:	tst	TSTCDN
+	beq	40$
+	mov	TEMPX, R1
+	mov	TEMPY, R2
+	add	#8., R1
+	add	#11., R2
+	call	BATCHK
+	bcc	40$
+	mov	#96., R0	; 'up' normal
+	call	ADDNR0
+	return	
+40$:	return
+
+; npc bat collision processing
+BATCON:	cmp	LEVEL, LEVEND
+	beq	2$
+	return
+2$:	call	CLRNOR
+	mov	BATY2, TEMPY1
+	mov	BATY2, TEMPY2
+	sub	BATDY2, TEMPY1
+	add	BATDY2, TEMPY2
+	sub	#4, TEMPY1
+	add	#4, TEMPY2
+	mov	BATX2, R0
+	mov	R0, TEMPX1
+	mov	R0, TEMPX2
+	add	#7., TEMPX2
+	; check left collision	
+	tst	TSTCLF
+	beq	10$
+	mov	TEMPX, R1
+	mov	TEMPY, R2
+	add	#4., R1
+	add	#8., R2
+	call	BATCHK
+	bcc	10$
+	; collided with left side
+	mov	R0, BALBAT	; ball position in bat
+	asl	R0
+	mov	BNORT3(R0), R0
+	mov	R0, BALANG	; new ball angle
+	call	BALINC		; increase ball velocity
+	; TODO: debug
+	mov	BALBAT, DBG002
+	mov	#1, SNDNUM
+10$:	return			; only left collision allowed
+
+	
+; bat vs npc check, NPCADR - current npc
+BATNCK:	mov	BATY, TEMPY1
+	mov	BATY, TEMPY2
+	sub	BATDY, TEMPY1
+	add	BATDY, TEMPY2
+	sub	#12., TEMPY1
+	add	#12., TEMPY2
+	mov	BATX, R0
+	mov	R0, TEMPX1
+	sub	#8., TEMPX1
+	mov	R0, TEMPX2
+	add	#16., TEMPX2
+	;
+	mov	NPCADR, R5
+	mov	10(R5), R3		; npc x (float)
+	mov	12(R5), R4		; npc y (float)
+	clrb	R3
+	clrb	R4
+	swab	R3
+	swab	R4
+	add	#8., R3
+	add	#8., R4
+	
+	cmp	R3, TEMPX1
+	blo	99$
+	cmp	R3, TEMPX2
+	bhi	99$
+	cmp	R4, TEMPY1
+	blo	99$
+	cmp	R4, TEMPY2
+	bhi	99$
+	; collided with npc
+	mov	#3, SNDNUM	; sound = 3 (npc boom)
+	mov	#255., 2(R5)	; state to 255 (dying)
+	clr	4(R5)		; clear substate
+	clr	14(R5)		; clear timers
+	clr	16(R5)	
+	mov	(R5), R0	; get npc score value
+	asl	R0
+	mov	SCORTB(R0), R0
+	add	R0, SCORE	; increase score
+	mov	#1, SCORCH	; need to draw it
+	cmp	(R5), #3.	; was it 'bee' npc?
+	bne	82$
+	mov	#500., BATPRZ
+	br	90$
+82$:	cmp	(R5), #5.	; was it 'bowling' npc?
+	bne	90$
+	mov	#50., BATPRZ
+90$:	sec
+	return
+99$:	clc
+	return
+
+; is ball glued to bat?
+GLUTST:	cmp	BATMOD, #2.
+	beq	14$
+	cmp	BATMOD, #6.
+	beq	14$
+	clc
+	return
+14$:	sec	
+	return
+
+	
+; //////////////////////////////////////////////////////////////////////////////
+; // MOVEMENT
+; //////////////////////////////////////////////////////////////////////////////	
+	
+ANGLE0:	.WORD	0	; angle 0..127
+VELOCI:	.WORD	0	; velocity 0..2 ?
+OBJECX:	.WORD	0	; left x coord
+OBJECY:	.WORD	0	; upper y coord
+TSTCDN:	.WORD	0	; directions: going down
+TSTCRH:	.WORD	0	; .. right
+TSTCUP:	.WORD	0	; .. up
+TSTCLF:	.WORD	0	; .. left
+
+MOVTSQ:	.WORD	0
+MOVTBA:	.WORD	0
+
+NORKUB:	.WORD	0	; k-addr of hitted block
+NORMAL:	.WORD	0	; normal angle
+NORTYP:	.WORD	0	; type of (1 - npc used)
+
+; clear normals table (4 x 3 words)
+CLRNOR:	clr	NORKUB
+	clr	NORMAL
+	clr	NORTYP
+	return
+
+; fix angles R0 = [0..127]
+; A in [A0..A1] = A2 etc
+ANGFIT:	.WORD	0.,2.,3., 125.,127.,124.
+	.WORD	30.,32.,29., 33.,35.,36.
+	.WORD	62.,64.,61., 65.,67.,68.
+	.WORD	94.,96.,93., 97.,99.,100.
+ANGFIE:
+	
+ANGFIX:	cmp	R0, #128.
+	blt	1$
+	sub	#128., R0
+	br	ANGFIX
+1$:	cmp	R0, #0
+	bge	2$
+	add	#128., R0
+	br	1$
+2$:	return
+
+ANGFI2:	call	ANGFIX
+	mov	R5, -(SP)
+	mov	#ANGFIT, R5
+1$:	cmp	R5, #ANGFIE
+	bhis	99$
+	cmp	R0, (R5)
+	blo	10$
+	cmp	R0, 2(R5)
+	bhi	10$
+	mov	4(R5), R0
+	br	99$
+10$:	add	#6., R5
+	br	1$
+99$:	mov	(SP)+, R5
+	return
+
+; correcting ANGLE0 from NORMAL
+ANGCOR:	tst	NORTYP
+	bne	.+4
+	return
+	mov	NORMAL, R1
+	mov	ANGLE0, R0	; reverting angle
+	add	#64., R0
+	call	ANGFIX
+	asl	R1
+	sub	R0, R1
+	mov	R1, R0
+	call	ANGFIX
+	mov	R0, ANGLE0
+	return
+
+; check where we are going (check angle)
+TSTANG:	clr	TSTCDN
+	clr	TSTCRH
+	clr	TSTCUP
+	clr	TSTCLF
+	; moving down
+	tst	ANGLE0
+	beq	10$
+	cmp	ANGLE0, #64.
+	bhis	10$
+	inc	TSTCDN
+10$:	; moving right
+	cmp	ANGLE0, #96.
+	blos	11$
+	inc	TSTCRH
+11$:	cmp	ANGLE0, #32.
+	bhis	12$
+	inc	TSTCRH
+12$:	; moving up
+	cmp	ANGLE0, #64.
+	blos	13$
+	inc	TSTCUP
+13$:	; moving left
+	cmp	ANGLE0, #32.
+	blos	14$
+	cmp	ANGLE0, #96.
+	bhis	14$
+	inc	TSTCLF
+14$:	return
+
+; add normal with zero background element, R0 - normal angle
+; don't change R1, R2
+ADDNR0:	mov	#1, NORTYP
+	mov	R0, NORMAL
+	clr	NORKUB
+	return
+
+; movement 01 - move by angle & velocity
+; -> TEMPX, TEMPY - coords (not float)
+MOVT01:	mov	ANGLE0, R0
+	asl	R0
+	asl	R0
+	mov	TBALPH(R0), R1
+	inc	R0
+	inc	R0
+	mov	TBALPH(R0), R2
+	mov	VELOCI, R3
+1$:	add	R1, OBJECX
+	add	R2, OBJECY
+	sob	R3, 1$
+	mov	OBJECX, R1
+	clrb	R1
+	swab	R1
+	mov	R1, TEMPX
+	mov	OBJECY, R2
+	clrb	R2
+	swab	R2
+	mov	R2, TEMPY
+	return
+
+; movement 02 - add wall's normals
+MOVT02:	mov	TEMPX, R1
+	mov	TEMPY, R2
+	; going right
+	tst	TSTCRH
+	beq	20$
+	tst	RHTWAL		; do we have right wall
+	beq	20$
+	cmp	R1, #230.
+	blo	20$
+	mov	#64., R0	; <- (left) normal angle
+	call	ADDNR0		; add collision normal
+20$:	tst	TSTCUP		; testing top wall
+	beq	30$
+	cmp	R2, #11.
+	bhi	30$
+	mov	#32., R0	; (down) normal angle
+	call	ADDNR0
+30$:	tst	TSTCDN		; testing bottom wall
+	beq	40$
+	cmp	R2, #165.
+	blo	40$
+	mov	#96., R0	; (up) normal angle
+	call	ADDNR0
+40$:	tst	TSTCLF		; testing left wall
+	beq	50$
+	cmp	LEVEL, LEVEND
+	bne	45$
+	cmp	R1, #6.
+	bhi	50$
+	; YOU WIN!
+	mov	#8., CURMOD
+	return
+45$:	cmp	R1, #11.
+	bhi	50$
+	mov	#0., R0		; -> (right) normal angle
+	call	ADDNR0
+50$:	return
+	
+
+
+; check collision with block, R1,R2 - x,y (in pix)
+CHKBPT:	mov	R2, R5
+	asr	R1
+	asr	R1
+	asr	R1
+	asr	R1
+	bic	#^B1111, R5
+	add	R1, R5
+	movb	LEVELC(R5), R0
+	bic	#177700, R0
+	beq	99$
+	bit	#^B110000, R0	; these are not collidable
+	bne	99$
+	; collided
+	bic	#177760, R2	; must use closest
+	sub	#8., R2		; to center of 0..16
+	bge	2$
+	neg	R2
+2$:	cmp	R2, MOVTSQ
+	bge	99$
+	mov	R2, MOVTSQ
+	mov	R5, MOVTBA
+99$:	return 
+
+; check block collision and add normal for block
+; MOVTSQ - 77-no collision
+; MOVTBA - block k-addr
+; R0 - normal angle
+ADDNR1:	cmp	MOVTSQ, #77
+	bne	10$
+	clc
+	return
+10$:	mov	#2., NORTYP
+	mov	R0, NORMAL
+	mov	MOVTBA, NORKUB
+	sec
+	return
+
+; movement 03 - field collision normals
+MOVT03:	mov	TEMPX, TEMPX1
+	add	#5., TEMPX1
+	mov	TEMPX, TEMPX2
+	add	#11., TEMPX2
+	mov	TEMPY, TEMPY1
+	add	#5., TEMPY1
+	mov	TEMPY, TEMPY2
+	add	#11., TEMPY2
+	; check right collision
+	tst	TSTCRH
+	beq	10$
+	mov	#77, MOVTSQ
+	mov	TEMPX2, R1
+	mov	TEMPY1, R2
+	inc	R1
+	call	CHKBPT
+	mov	TEMPX2, R1
+	mov	TEMPY2, R2
+	inc	R1
+	call	CHKBPT	
+	mov	#64., R0		; <- normal
+	call	ADDNR1
+	bcs	99$
+	; check left collision
+10$:	tst	TSTCLF
+	beq	20$
+	mov	#77, MOVTSQ
+	mov	TEMPX1, R1
+	mov	TEMPY1, R2
+	dec	R1
+	call	CHKBPT
+	mov	TEMPX1, R1
+	mov	TEMPY2, R2
+	dec	R1
+	call	CHKBPT
+	mov	#0., R0			; -> normal
+	call	ADDNR1
+	bcs	99$	
+	; check up collision
+20$:	tst	TSTCUP
+	beq	30$
+	mov	#77, MOVTSQ
+	mov	TEMPX1, R1
+	mov	TEMPY1, R2
+	dec	R2
+	call	CHKBPT
+	mov	TEMPX2, R1
+	mov	TEMPY1, R2
+	dec	R2
+	call	CHKBPT
+	mov	#32., R0		; (down) normal
+	call	ADDNR1
+	bcs	99$
+	; check down collision
+30$:	tst	TSTCDN
+	beq	99$
+	mov	#77, MOVTSQ
+	mov	TEMPX1, R1
+	mov	TEMPY2, R2
+	inc	R2
+	call	CHKBPT
+	mov	TEMPX2, R1
+	mov	TEMPY2, R2
+	inc	R2
+	call	CHKBPT
+	mov	#96., R0		; (up) normal
+	call	ADDNR1
+99$:	return
+
+; angle to the ball
+ANGONB:	mov	BALX, R1
+	mov	BALY, R2
+	clrb	R1
+	clrb	R2
+	swab	R1
+	swab	R2
+	mov	OBJECX, R3
+	mov	OBJECY, R4
+	clrb	R3
+	clrb	R4
+	swab	R3
+	swab	R4
+	cmp	R2, R4
+	blos	10$
+	; ball is down
+	cmp	R1, R3
+	blos	5$
+	mov	#16., R0
+	return
+5$:	mov	#48., R0
+	return
+10$:	; ball is up
+	cmp	R1, R3
+	blos	15$
+	mov	#112., R0
+	return
+15$:	mov	#80., R0
+	return
+
+
+; movement summary
+MOVTOB:	call	TSTANG		; check angle
+	call	MOVT01		; move by angle
+	call	CLRNOR		;
+	call	MOVT02		; walls normals
+	call	ANGCOR		; correct them
+	call	CLRNOR		;
+	call	MOVT03		; field normals
+	call	ANGCOR		; correct them
+	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // NPC
+; //////////////////////////////////////////////////////////////////////////////
+	
+; clear NPC objects
+CLRNPC:	mov	#NPCTBL, NPCADR
+1$:	mov	NPCADR, R0
+	clr	(R0)+
+	clr	(R0)+
+	clr	(R0)+
+	clr	(R0)+
+	clr	(R0)+
+	clr	(R0)+
+	clr	(R0)+
+	clr	(R0)+
+	clr	(R0)+
+	clr	(R0)+
+	add	#20., NPCADR
+	cmp	NPCADR, #NPCTBE
+	blo	1$ 
+	return
+
+; make commands to draw npc objects
+; NPC object: type, state, substate, spr id, x, y, timer1, timer2, data1, data2
+NPCDRA:	; clear NPCs counts
+	mov	#NPCCNT, R0
+	mov	#20., R3
+	clr	(R0)+
+	sob	R3, .-2
+	; draw them
+	mov	#NPCTBL, NPCADR
+1$:	mov	NPCADR, R5
+	tst	(R5)
+	beq	99$
+	mov	(R5), R1	; R1 <- npc type
+	asl	R1
+	inc	NPCCNT(R1)	; increase this type's count
+	;
+	add	#6, R5
+	mov	(R5)+, R0	; R0 <- spr ID
+	mov	(R5)+, R1
+	clrb	R1
+	swab	R1
+	add	#32., R1	; R1 <- X
+	mov	(R5)+, R2
+	clrb	R2
+	swab	R2
+	add	#48., R2	; R2 <- Y
+	;
+	mov	#11., R5	; 11. - sprite 16x16
+	clr	R4		; not a ball
+	call	CMDADD
+	;
+99$:	add	#20., NPCADR
+	cmp	NPCADR, #NPCTBE
+	blo	1$ 
+	return
+
+
+NPCSP0:	.WORD	345.		; spawn timer
+
+; npc spawn procedure
+NPCSPA:	add	#6, NPSPAD		; cycle spawn points
+	tst	@NPSPAD
+	bne	1$
+	mov	#NPSPAT, NPSPAD
+1$:	dec	NPCSP0
+	beq	10$
+	return
+10$:	call	RND256			; random timer again
+	add	#100., R0		; some delay
+	mov	R0, NPCSP0
+	mov	@NPSPAD, R4
+	add	#2, NPSPAD
+	mov	@NPSPAD, R1
+	add	#2, NPSPAD
+	mov	@NPSPAD, R2
+	mov	#NPSPAT, NPSPAD		; again to before spawn pool
+	sub	#6, NPSPAD
+	; check max spawning count
+	mov	R4, R0
+	asl	R0
+	mov	NPCCNM(R0), R5
+	mov	NPCCNT(R0), R0
+	cmp	R0, R5
+	blt	12$
+	return
+	; now spawn, R4 - type, R1 - x block, R2 - y block
+12$:	mov	#NPCTBL, NPCADR
+14$:	mov	NPCADR, R5
+	tst	(R5)
+	bne	15$
+	mov	R4, (R5)+		; type
+	clr	(R5)+			; state = 0 (emerging)
+	clr	(R5)+			; substate = 0
+	mov	#2, (R5)+		; spr id
+	mov	R1, R0
+	ash	#4, R0			; x-block to x-pix
+	swab	R0			; to float
+	mov	R0, (R5)+		; x (floating)
+	mov	R2, R0
+	ash	#4, R0
+	swab	R0
+	mov	R0, (R5)+		; y (floating)
+	clr	(R5)+			; timer 1
+	clr	(R5)+			; timer 2
+	clr	(R5)+			; data 1
+	clr	(R5)+			; data 2
+	br	99$
+15$:	add	#20., NPCADR
+	cmp	NPCADR, #NPCTBE
+	blo	14$
+99$:	return
+
+; state 0 - emerging
+NPDEME:	mov	NPCADR, R5
+	mov	4(R5), R2		; substate
+	asl	R2
+	mov	SPT000(R2), R2		; spr id
+	mov	R2, 6(R5)		; set sprite
+	;
+	inc	14(R5)			; timer 1
+	cmp	14(R5), #8.
+	bhis	1$
+	return
+1$:	clr	14(R5)			; clear timer 1
+	inc	4(R5)			; increase substate
+	cmp	4(R5), #4.
+	bhis	2$
+	return
+2$:	mov	#1, 2(R5)		; change state to 1 (alive)
+	mov	#0, 4(R5)		; clear substate
+	mov	#0, 14(R5)		; clear timer 1
+	return
+
+; state 255. - dying
+NPDDYI:	mov	NPCADR, R5
+	mov	4(R5), R2		; substate
+	asl	R2
+	mov	SPT255(R2), R2
+	mov	R2, 6(R5)		; set sprite
+	;
+	inc	14(R5)			; timer 1
+	cmp	14(R5), #5.
+	bhis	1$
+	return
+1$:	clr	14(R5)			; clear timer 1
+	inc	4(R5)
+	cmp	4(R5), #8.
+	bhis	2$
+	return
+2$:	clr	(R5)
+	return
+
+; npc is out of field, R5 - NPCADR
+NPCOUT:	cmp	10(R5), #61184.	; x > 239 * 256 ?
+	blo	99$
+	mov	#255., 2(R5)	; state = out of field
+	mov	#7., 4(R5)	; spr id = empty 16x16
+	clr	14(R5)
+	clr	16(R5)
+99$:	return
+
+	
+; 'empty' npc
+NPD000:	return
+
+
+; simple 'face' npc
+NPD001:	mov	NPCADR, R5
+	mov	4(R5), R2	; substate
+	asl	R2
+	mov	SPT001(R2), R2
+	mov	R2, 6(R5)	; set spr id
+	; timer 1
+	inc	14(R5)		; timer 1
+	cmp	14(R5), #16.
+	blo	30$
+	clr	14(R5)
+	inc	4(R5)		; substate
+	cmp	4(R5), #8.
+	blo	30$
+	clr	4(R5)
+30$:	; timer 2
+	inc	16(R5)		; timer 2
+	cmp	16(R5), #200.
+	blo	40$
+	clr	16(R5)
+	call	RND256
+	asr	R0		; 0..127
+	mov	R0, 20(R5)	; change angle to random
+40$:	; movement
+	mov	10(R5), OBJECX
+	mov	12(R5), OBJECY
+	mov	20(R5), ANGLE0
+	mov	#1, VELOCI
+	call	MOVTOB
+	mov	NPCADR, R5
+	mov	OBJECX, 10(R5)
+	mov	OBJECY, 12(R5)
+	mov	ANGLE0, 20(R5)
+	call	NPCOUT		; 'out' check
+	return 
+
+
+; check can we launch 'bee'?
+BEECHK:	mov	#NPCTBL, R0
+1$:	cmp	(R0), #3.	; type = 3 - it's a bee
+	bne	10$
+	clc
+	return
+10$:	add	#20., R0
+	cmp	R0, #NPCTBE
+	blo	1$
+	sec
+	return
+
+BEEADD:	mov	#NPCTBL, R0
+14$:	tst	(R0)
+	bne	15$
+	mov	#3., (R0)+		; type = 3 (bee)
+	clr	(R0)+			; state = 0 (emerging)
+	clr	(R0)+			; substate = 0
+	mov	#2, (R0)+		; spr id
+	mov	OBJECX, (R0)+		; x (floating)
+	mov	OBJECY, (R0)+		; y (floating)
+	clr	(R0)+			; timer 1
+	clr	(R0)+			; timer 2
+	clr	(R0)+			; data 1
+	clr	(R0)+			; data 2
+	return
+15$:	add	#20., R0
+	cmp	R0, #NPCTBE
+	blo	14$
+	return	
+	
+; 'hive' npc
+NPD002:	mov	NPCADR, R5
+	mov	4(R5), R2	; substate
+	asl	R2
+	mov	SPT002(R2), R2
+	mov	R2, 6(R5)	; spr id
+	mov	FRAMCN, R2	; increase substate
+	bic	#^B1111111111111100, R2
+	bne	10$
+	inc	4(R5)
+	cmp	4(R5), #3.	; substate must be 0..2
+	blo	10$
+	clr	4(R5)
+10$:	; timer 1
+	inc	14(R5)		; timer 1
+	cmp	14(R5), #300.
+	blo	20$
+	clr	14(R5)
+	; check can we spawn 'bee'
+	; call	BEECHK
+	; bcc	20$
+	mov	10(R5), OBJECX
+	mov	12(R5), OBJECY	
+	call	BEEADD
+20$:	; timer 2
+	inc	16(R5)		; timer 2
+	cmp	16(R5), #200.
+	blo	40$
+	clr	16(R5)
+	call	RND256
+	asr	R0		; 0..127
+	mov	R0, 20(R5)	; change angle to random
+40$:	; movement
+	mov	10(R5), OBJECX
+	mov	12(R5), OBJECY
+	mov	20(R5), ANGLE0
+	mov	#1, VELOCI
+	call	MOVTOB
+	mov	NPCADR, R5
+	mov	OBJECX, 10(R5)
+	mov	OBJECY, 12(R5)
+	mov	ANGLE0, 20(R5)
+	call	NPCOUT		; 'out' check
+	return 
+
+; 'bee' npc
+NPD003:	mov	NPCADR, R5
+	mov	4(R5), R2	; substate
+	asl	R2
+	mov	SPT003(R2), R2
+	mov	R2, 6(R5)	; spr id
+	mov	FRAMCN, R2	; increase substate
+	bic	#^B1111111111111100, R2
+	bne	10$
+	inc	4(R5)
+	cmp	4(R5), #2.	; substate must be 0..1
+	blo	10$
+	clr	4(R5)
+10$:	; movement
+	add	#256., 10(R5)	; increase X (float)
+	call	NPCOUT		; 'out' check
+	return
+
+; 'romb' npc
+NPD004:	mov	NPCADR, R5
+	mov	#SPT004, R0
+	call	N4FRAM
+	; timer 2
+	inc	16(R5)		; timer 2
+	cmp	16(R5), #40.
+	blo	40$
+	clr	16(R5)
+	mov	10(R5), OBJECX
+	mov	12(R5), OBJECY
+	call	ANGONB
+	mov	R0, 20(R5)	; change angle to ball
+40$:	; movement - must go to the ball
+	mov	10(R5), OBJECX
+	mov	12(R5), OBJECY
+	mov	20(R5), ANGLE0
+	mov	#2, VELOCI
+	call	MOVTOB
+	mov	NPCADR, R5
+	mov	OBJECX, 10(R5)
+	mov	OBJECY, 12(R5)
+	mov	ANGLE0, 20(R5)
+	call	NPCOUT		; 'out' check
+	return 
+
+; 'bowling' npc
+NPD005:	mov	NPCADR, R5
+	mov	#SPT005, R0
+	call	N4FRAM
+	; timer 2
+	inc	16(R5)		; timer 2
+	cmp	16(R5), #20.
+	blo	40$
+	clr	16(R5)
+	; movement - set new angle
+	mov	12(R5), R0
+	clrb	R0
+	swab	R0
+	add	#8., R0
+	cmp	R0, BATY
+	beq	26$
+	blo	28$
+	mov	#116., 20(R5)
+	br	40$
+26$:	clr	20(R5)
+	br	40$
+28$:	mov	#16., 20(R5)
+40$:	; movement
+	mov	10(R5), OBJECX
+	mov	12(R5), OBJECY
+	mov	20(R5), ANGLE0
+	mov	#4., VELOCI
+	call	MOVTOB
+	mov	NPCADR, R5
+	mov	OBJECX, 10(R5)
+	mov	OBJECY, 12(R5)
+	mov	ANGLE0, 20(R5)
+	call	NPCOUT		; 'out' check
+	return 
+
+; 'npc bat'
+NPD006:	mov	NPCADR, R5
+	mov	#SPT007, R0
+	call	N4FRAM
+	; timer 2
+	inc	16(R5)		; timer 2
+	cmp	16(R5), #200.
+	blo	40$
+	clr	16(R5)
+	call	RND256
+	asr	R0		; 0..127
+	mov	R0, 20(R5)	; change angle to random
+40$:	; movement
+	mov	10(R5), OBJECX
+	mov	12(R5), OBJECY
+	mov	20(R5), ANGLE0
+	mov	#1, VELOCI
+	call	MOVTOB
+	mov	NPCADR, R5
+	mov	OBJECX, 10(R5)
+	mov	OBJECY, 12(R5)
+	mov	ANGLE0, 20(R5)
+	call	FIELDO
+	mov	NPCADR, R5	; r5 was broken in fieldo
+	call	NPCOUT		; 'out' check
+	return 
+
+; set 4-frame sprite id
+; R5 - npcadr, R0 - 4-spr tbl
+N4FRAM:	mov	FRAMCN, R2
+	bic	#^B1111111111111100, R2
+	bne	99$
+	mov	4(R5), R2	; substate
+	bic	#^B1111111111111100, R2
+	asl	R2
+	add	R0, R2		; add spr tbl
+	mov	(R2), 6(R5)	; spr id
+	inc	4(R5)		; substate++
+99$:	return
+
+; npc process routines table
+NPDTBL:	.WORD	NPD000, NPD001, NPD002, NPD003, NPD004, NPD005, NPD006, 0, 0, 0
+	
+; npc process
+NPCDO:	mov	#NPCTBL, NPCADR
+1$:	; common for all npcs
+	mov	NPCADR, R5
+	mov	2(R5), R1	; state
+	cmp	#0., R1		; 0 - emerging
+	bne	11$
+	call	NPDEME
+	br	99$
+11$:	cmp	#255., R1	; 255 - npc is ka-boom
+	bne	12$
+	call	NPDDYI
+	br	99$
+12$:	; test ball and bat collision
+	call	BALNCK
+	bcs	99$
+	call	BATNCK
+	bcs	99$
+	; each npc use own procedure
+	mov	@NPCADR, R0	; npc type
+	asl	R0
+	add	#NPDTBL, R0
+	mov	(R0), R0
+	beq	99$		; not implemented npc
+	call	(R0)
+	;
+99$:	add	#20., NPCADR
+	cmp	NPCADR, #NPCTBE
+	blo	1$
+	return
+
+	
+; //////////////////////////////////////////////////////////////////////////////
+; // SOUND
+; //////////////////////////////////////////////////////////////////////////////
+
+SNDNUM:	.WORD	0
+
+SNDSTA:	tst	SNDNUM
+	bne	10$
+	return
+10$:	mov	#12., R5	; 12. - sound
+	mov	SNDNUM, R0	; R0 <- ID
+	clr	SNDNUM
+	call	CMDADD
+	return
+	
+	
+; //////////////////////////////////////////////////////////////////////////////
+; // DRAWING, PRINT ETC
+; //////////////////////////////////////////////////////////////////////////////
+
+; binary word print
+; R0 - word, R1, R2 - x*8, y
+SPRBW4:	asl	R2		;
+	mov	LINEAD(R2),R2	;
+	add	R1, R2		;
+	mov	#176640, R4
+	mov	#176642, R5
+	; clearing vaddr
+	mov	R2, (R4)
+	mov	#5., R3
+12$:	mov	#8., R1
+13$:	clr	(R5)
+	inc	(R4)
+	sob	R1, 13$
+	add	#72., (R4)
+	sob	R3, 12$
+	mov	R2, (R4)
+	; set rotation
+	clr	R3
+	mov	#16., TEMPR3
+20$:	; get bit
+	clr	R1
+	rol	R0
+	rol	R1
+	; spr addr
+	asl	R1
+	asl	R1
+	asl	R1
+	add	#SPAL40, R1
+	; put bits
+	movb	(R1)+, R2
+	ash	R3, R2
+	bisb	R2,(R5)
+	add	#80., (R4)
+	movb	(R1)+, R2
+	ash	R3, R2
+	bisb	R2,(R5)
+	add	#80., (R4)
+	movb	(R1)+, R2
+	ash	R3, R2
+	bisb	R2,(R5)
+	add	#80., (R4)
+	movb	(R1)+, R2
+	ash	R3, R2
+	bisb	R2,(R5)
+	add	#80., (R4)
+	movb	(R1)+, R2
+	ash	R3, R2
+	bisb	R2,(R5)	
+	sub	#320., (R4)
+	tst	R3
+	beq	22$
+	inc	(R4)
+	clr	R3
+	br	24$
+22$:	mov	#4., R3
+24$:	dec	TEMPR3
+	bne	20$
+	return	
+
+; octal word print 4x5
+; R0 - word, R1, R2 - x*8, y
+SPROW4:	asl	R2		;
+	mov	LINEAD(R2),R2	;
+	add	R1, R2		;
+	mov	#176640, R4
+	mov	#176642, R5
+	; clearing vaddr
+	mov	R2, (R4)
+	mov	#5., R3
+12$:	clr	(R5)
+	inc	(R4)
+	clr	(R5)
+	inc	(R4)
+	clr	(R5)
+	add	#78., (R4)
+	sob	R3, 12$
+	mov	R2, (R4)
+	; 1st bit
+	clr	R1
+	rol	R0
+	rol	R1
+	; set rotation
+	clr	R3
+	mov	#6., TEMPR3
+20$:	; spr addr
+	asl	R1
+	asl	R1
+	asl	R1
+	add	#SPAL40, R1
+	; put bits
+	movb	(R1)+, R2
+	ash	R3, R2
+	bisb	R2,(R5)
+	add	#80., (R4)
+	movb	(R1)+, R2
+	ash	R3, R2
+	bisb	R2,(R5)
+	add	#80., (R4)
+	movb	(R1)+, R2
+	ash	R3, R2
+	bisb	R2,(R5)
+	add	#80., (R4)
+	movb	(R1)+, R2
+	ash	R3, R2
+	bisb	R2,(R5)
+	add	#80., (R4)
+	movb	(R1)+, R2
+	ash	R3, R2
+	bisb	R2,(R5)	
+	sub	#320., (R4)
+	tst	R3
+	beq	22$
+	inc	(R4)
+	clr	R3
+	br	24$
+22$:	mov	#4., R3
+24$:	; next octets
+	clr	R1
+	rol	R0
+	rol	R1
+	rol	R0
+	rol	R1
+	rol	R0
+	rol	R1
+	dec	TEMPR3
+	bne	20$
+	return	
+
+
+SPRD00:	.WORD	0
+SPRD05:	.BYTE	60, 60, 60, 60, 60, 0
+SPRD90:	.WORD	10000., 1000., 100., 10., 1
+
+; decimal word print
+; R0 - word, R1, R2 - x*8, y
+SPRDWO:	mov	R0, TEMPR0
+	mov	#SPRD90, TEMPR2
+	mov	#5, TEMPR3
+	clr	SPRD00
+	mov	#SPRD05, R5
+1$:	mov	@TEMPR2, TEMPR1
+	add	#2, TEMPR2
+	clr	SPRD00
+10$:	cmp	TEMPR0, TEMPR1
+	blo	20$
+	sub	TEMPR1, TEMPR0
+	inc	SPRD00
+	br	10$
+20$:	mov	SPRD00, R0
+	add	#48., R0
+	movb	R0, (R5)+
+	dec	TEMPR3
+	bne	1$
+	mov	#SPRD05, R0
+	call	FN2PRT
+	return
+
+; sprite 16
+; R0 - adr, R1, R2 - x*8, y
+SPRC16:	asl	R2
+	mov	LINEAD(R2), R2
+	add	R1, R2
+	mov	R2, @#176640
+	mov	#80., R1
+	sub	(R0)+, R1
+	mov	(R0)+, R2
+	inc	R1
+	mov	#176640, R4
+	mov	#176642, R5
+20$:	mov	(R0)+, (R5)
+	inc	(R4)
+	mov	(R0)+, (R5)
+	add	R1, (R4)
+	sob	R2, 20$
+	return
+
+; clear kub 16x16, R5 - k-addr
+KCLR16:	mov	R5, -(SP)
+	asl	R5
+	mov	KUB2VA(R5), R0
+	mov	#176640, R4
+	mov	#176642, R5
+	mov	R0, (R4)
+	mov	#16., R3
+1$:	clr	(R5)
+	inc	(R4)
+	clr	(R5)
+	add	#79., (R4)
+	sob	R3, 1$
+	mov	(SP)+, R5
+	return
+
+; draw 'highlighted' block
+KSET17:	asl	R5
+	mov	KUB2VA(R5), R0
+	mov	#176640, R4
+	mov	#176642, R5
+	mov	R0, (R4)
+	mov	#15., R3
+1$:	mov	#^B1111110011111100, (R5)
+	inc	(R4)
+	mov	#^B0011111100111111, (R5)
+	add	#79., (R4)
+	sob	R3, 1$
+	return
+
+; sprite kub 16x16, R0 - spr adr, R5 - k-addr
+KUSPRI:	mov	R5, R1
+	bic	#^B1111111111110000, R1
+	asl	R1		;
+	add	#4., R1		; x(8pix) -> R1
+	mov	R5, R2		;
+	bic	#^B1111, R2	;
+	add	#48., R2	; y -> R2
+	call	SPRC16	
+	return
+
+; fill area
+; R0 - color, R1,R2 - x8,y, R3,R4 - dx,dy
+FILLKB:	asl	R2
+	mov	LINEAD(R2), R2
+	add	R1, R2
+	mov	R2, @#176640
+	mov	#176642, R5
+	mov	#176640, R2
+1$:	mov	R3, R1
+2$:	mov	R0, (R5)
+	inc	(R2)
+	sob	R1, 2$
+	sub	R3, (R2)
+	add	#80., (R2)
+	sob	R4, 1$
+	return
+
+; sprite
+; R0 - adr, R1, R2 - x*8, y
+SPRCXX:	asl	R2
+	mov	LINEAD(R2), R2
+	add	R1, R2
+	mov	R2, @#176640
+	mov	(R0)+, R3	; dx
+	mov	(R0)+, R2	; dy
+	mov	#80., R1
+	sub	R3, R1
+	mov	#176642, R5
+	mov	R3, R4
+20$:	mov	R4, R3
+30$:	mov	(R0)+, (R5)
+	inc	@#176640
+	sob	R3, 30$
+	add	R1, @#176640
+	sob	R2, 20$
+	return
+
+
+; out char (x1/x2) for planes 1,2 and advance vaddr
+; R0-char, @#176640 - addr
+CH0PR0:	sub	#32., R0	; common prepare vaddr and regs
+	asl	R0
+	mov	FN6OFS(R0), R0
+	add	#FN6DAT, R0
+	mov	#176640, R4
+	mov	#176642, R5
+	mov	#80., R1
+	mov	#6., R3
+	return
+CH1PR3:	call	CH0PR0		; for both planes
+3$:	mov	(R0)+, R2
+	mov	R2, (R5)
+	add	R1, (R4)
+	sob	R3, 3$
+	sub	#479., @#176640
+	return
+CH1PR2:	call	CH0PR0		; for plane 2
+3$:	mov	(R0)+, R2
+	clrb	R2
+	mov	R2, (R5)
+	add	R1, (R4)
+	sob	R3, 3$
+	sub	#479., @#176640
+	return
+CH1PR1:	call	CH0PR0		; for plane 1
+3$:	mov	(R0)+, R2
+	clrb	R2
+	swab	R2
+	mov	R2, (R5)
+	add	R1, (R4)
+	sob	R3, 3$
+	sub	#479., @#176640
+	return
+CH2PR3:	call	CH0PR0
+3$:	mov	(R0)+, R2
+	mov	R2, (R5)
+	add	R1, (R4)
+	mov	R2, (R5)
+	add	R1, (R4)
+	sob	R3, 3$
+	sub	#959., @#176640
+	return
+CH2PR2:	call	CH0PR0
+3$:	mov	(R0)+, R2
+	clrb	R2
+	mov	R2, (R5)
+	add	R1, (R4)
+	mov	R2, (R5)
+	add	R1, (R4)
+	sob	R3, 3$
+	sub	#959., @#176640
+	return
+CH2PR1:	call	CH0PR0
+3$:	mov	(R0)+, R2
+	clrb	R2
+	swab	R2
+	mov	R2, (R5)
+	add	R1, (R4)
+	mov	R2, (R5)
+	add	R1, (R4)
+	sob	R3, 3$
+	sub	#959., @#176640
+	return
+
+CH1TBA:	.WORD	0, CH1PR1, CH1PR2, CH1PR3
+CH2TBA:	.WORD	0, CH2PR1, CH2PR2, CH2PR3
+
+; out string (x1/x2 font), R0 - addr of asciz, R1 - x, R2 - y
+; codes in string - 301, 302, 303 - change color
+; x1 font print
+FN1PRT:	mov	#CH1TBA, TEMPR5
+	call	FN0PR0
+	return
+; x2 font print
+FN2PRT:	mov	#CH2TBA, TEMPR5
+	call	FN0PR0
+	return
+; common routine, TEMPR5 - table of char out routines
+FN0PR0:	asl	R2
+	mov	LINEAD(R2), R2
+	add	R1, R2
+	mov	R2, @#176640
+	mov	R0, TEMPR0
+	mov	#3, TEMPR1	; current color
+10$:	movb	@TEMPR0, R0
+	beq	99$
+	swab	R0
+	clrb	R0
+	swab	R0
+	cmp	R0, #301
+	blo	20$
+	mov	R0, TEMPR1
+	sub	#300, TEMPR1
+	inc	TEMPR0
+	br	10$
+20$:	mov	TEMPR1, R1
+	asl	R1
+	add	TEMPR5, R1
+	mov	(R1), R1
+	call	(R1)
+	inc	TEMPR0
+	br	10$
+99$:	return
+
+
+; scroll routines
+SCRL00:	.WORD	0
+SCRL03:	.WORD	0
+SCRL04:	.WORD	0
+
+SCROLC:	mov	#240., R2
+	asl	R2
+	mov	LINEAD(R2), R2
+	add	#30., R2
+	mov	R2, @#176640	
+	sub	#32., R0
+	asl	R0
+	mov	FN6OFS(R0), R0
+	add	#FN6DAT, R0
+	mov	#176640, R4
+	mov	#176642, R5
+	mov	#6., R3
+3$:	mov	(R0)+, R2
+	mov	SCRL03, R1
+	beq	5$
+4$:	asr	R2
+	dec	R1
+	bne	4$
+5$:	bic	#^B1111111111111110, R2	; only one pixel
+	bis	R2, (R5)
+	add	#80., (R4)
+	sob	R3, 3$
+	return
+
+SCROLT:	mov	#240., R2
+	asl	R2
+	mov	LINEAD(R2), R2
+	add	#10., R2
+	mov	R2, @#176640
+	mov	#176640, R4
+	mov	#176642, R5	
+	mov	#6., R3
+10$:	movb	(R5), R0		; first 8-bit
+	asr	R0			; will scroll out
+	bic	#^B1111111110000000, R0
+	movb	R0, (R5)
+	add	#80., (R4)
+	sob	R3, 10$
+	sub	#479., (R4)
+	mov	#20., TEMPR3		; next 20 bytes
+20$:	mov	#6., R3			; will scroll
+30$:	movb	(R5), R0		; into previous byte
+	swab	R0
+	clrb	R0
+	clc
+	ror	R0
+	swab	R0
+	movb	R0, (R5)
+	dec	(R4)
+	swab	R0
+	bisb	R0, (R5)
+	add	#81., (R4)
+	sob	R3, 30$
+	sub	#479., (R4)
+	dec	TEMPR3
+	bne	20$
+	
+	movb	@SCRL00, R0		; must place a line of bits
+	call	SCROLC			; on 21th (30. on screen) position
+	inc	SCRL03
+	cmp	SCRL03, #8.
+	blo	99$
+	clr	SCRL03
+	inc	SCRL00
+	tstb	@SCRL00
+	bne	99$
+	mov	#STR030, SCRL00
+	inc	SCRL04
+	bit	#^B11, SCRL04
+	bne	99$
+	mov	#STR031, SCRL00
+99$:	return
+
+
+; clear planes 1 & 2
+CLRSC1:	mov	#176640, R4
+	mov	#176642, R5
+	mov	#100000, (R4)
+	mov	#55000, R3
+10$:	clr	(R5)
+	inc	(R4)
+	sob	R3, 10$
+	return
+
+; clear screen planes
+CLRSCR:	mov	#2., R5		; 2. - clear plane 0
+	call	CMDEXE
+	call	CLRSC1
+	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // UTILS
+; //////////////////////////////////////////////////////////////////////////////
+
+; random with linear-feedback shift register (Galois)
+; random -> R0
+.radix	16
+LFSR00:	.WORD	0ACE1
+LFSR01:	.WORD	0B400
+RANDOM:	mov	R1, -(SP)
+	mov	LFSR00, R0
+	mov	LFSR01, R1
+	clc
+	ror	R0
+	bcc	2$
+	xor	R1, R0
+2$:	mov	R0, LFSR00
+	mov	(SP)+, R1
+	return
+.radix 	8
+
+; random 0..15.
+RND16:	call	RANDOM
+	ash	#-6, R0
+	bic	#^B1111111111110000, R0
+	return
+
+; random 0..255.
+RND256:	call	RANDOM
+	ash	#-4, R0
+	swab	R0
+	clrb	R0
+	swab	R0
+	return
+	
+; squeeze 16. words, R0 - addr
+SQU160:	.BLKW	16.
+SQU16W:	mov	R0, R4
+	mov	#SQU160, R5
+	mov	#16., R3
+	clr	(R5)+
+	sob	R3, .-2
+	mov	#SQU160, R5
+	mov	#16., R3
+1$:	mov	(R4)+, (R5)
+	beq	2$
+	inc	R5
+	inc	R5
+2$:	sob	R3, 1$
+	mov	R0, R4
+	mov	#SQU160, R5
+	mov	#16., R3
+	mov	(R5)+, (R4)+
+	sob	R3, .-2
+	return
+
+SHF000:	.WORD	0
+
+; shuffle (a bit) 16. words, R0 - addr
+SHF16W:	mov	R0, SHF000
+	mov	#32., R3
+3$:	call	RND16
+	mov	R0, R1
+4$:	call	RND16
+	cmp	R0, R1
+	beq	4$
+	asl	R0
+	asl	R1
+	add	SHF000, R0
+	add	SHF000, R1	
+	mov	(R0), R2
+	mov	(R1), (R0)
+	mov	R2, (R1)
+	sob	R3, 3$
+	return
+
+
+RTICNT:	.WORD	0
+
+; 'empty' interrupt
+RTIADR:	inc	RTICNT
+	rti
+
+; vsyinc interrupt
+VSYNI:	inc	VSY1CN
+	inc	VSY2CN
+	rti
+	
+; severe error
+ERROR:	mov	#116300, @#176640
+	mov	#SPRERR, R0
+	mov	#7., R2
+2$:	movb	(R0)+, @#176642
+	inc	@#176640
+	movb	(R0)+, @#176642
+	inc	@#176640
+	movb	(R0)+, @#176642
+	inc	@#176640
+	sub	#3, @#176640
+	add	#80., @#176640
+	sob	R2, 2$
+	br	.
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // DATA 
+; //////////////////////////////////////////////////////////////////////////////
+
+.radix	10	; RADIX 10 RADIX 10 RADIX 10 !!!
+
+CMDADR:	.WORD	0		; addr in ppu command buffer
+
+TEMPR0:	.WORD	0
+TEMPR1:	.WORD	0
+TEMPR2:	.WORD	0
+TEMPR3:	.WORD	0
+TEMPR4:	.WORD	0
+TEMPR5:	.WORD	0
+
+TEMPX:	.WORD	0
+TEMPY:	.WORD	0
+TEMPX1:	.WORD	0
+TEMPX2:	.WORD	0
+TEMPY1:	.WORD	0
+TEMPY2:	.WORD	0
+
+WAICL0:	.WORD	0	; to measure wait time
+WAICLC:	.WORD	0	; avg wait time
+FRAMCN:	.WORD	0	; 'frame' counter
+PAUSE:	.WORD	0
+
+; current mode
+; 0 - main menu prepare, 1 - main menu
+; 2 - level prepare, 3 - play ... etc
+CURMOD:	.WORD	0
+
+; setup vars
+DBGMOD:	.WORD	0
+DBG002:	.WORD	0	; DBG: ball pos inside bat
+
+MENEXT:	.WORD	0	; opened menu extension
+MENXT1:	.WORD	0
+	.WORD	0,  1,  2,  3,  4,  5,  6,  7,  8,  9
+	.WORD	10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+	.WORD	20, 22, 24, 28, 30, 32, 34, 36, 38, 40
+MENXT2:	.WORD	0
+	.WORD	0,  1,  2,  4,  6,  8,  10, 12, 14, 16
+	.WORD	18, 20, 22, 24, 26, 28, 30, 32, 34, 36
+	.WORD	38, 40, 40, 40, 40, 40, 40, 40, 40, 40
+
+PALRGB:	.WORD	65535	; RGB palette (or else will be GRB)
+CHEATS:	.WORD	0
+LEVEL:	.WORD	1
+LEVEND:	.WORD	15	; # of level end
+LIVES:	.WORD	20
+SCORE:	.WORD	0
+HSCORE:	.WORD	0
+SCORCH:	.WORD	0	; 1 - need redraw score
+LIVECH:	.WORD	0	; 1 - need redraw lives
+RHTWAL:	.WORD	0	; right wall presence
+RHWCNT:	.WORD	0
+LOSTCN:	.WORD	0	; are we dying?
+
+; angles from bat
+BNORT1:	.WORD	85, 82, 79, 76, 74, 72, 71, 70, 69, 68, 67, 66
+	.WORD	63  ; ~ 64
+	.WORD	62, 61, 60, 59, 58, 57, 56, 54, 52, 50, 47, 44
+	.WORD	43, 43, 43
+	
+BNORT2:	.WORD	85, 83, 81, 79, 77, 75, 74, 73, 72, 71
+	.WORD	70, 69, 68, 68, 67, 67, 66, 66, 65, 65
+	.WORD	63  ; ~ 64
+	.WORD	63, 63, 62, 62, 61, 61, 60, 60, 59, 58
+	.WORD	57, 56, 55, 54, 53, 51, 49, 47, 45, 43
+	.WORD	43, 43, 43
+
+BNORT3:	.WORD	108, 111, 114, 117, 119, 121, 122, 123, 124, 125, 126, 127
+	.WORD	1  ; center
+	.WORD	3, 4, 5, 6, 7, 8, 9, 11, 13, 15, 18, 21
+	.WORD	21, 21, 21
+	
+; npc score table
+SCORTB:	.WORD	0,  1,  2,  3,  4,  5,  6,  7,  8,  9
+	.WORD	10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+
+; npc maximal count on levels
+NPCCNM:	.WORD	0, 2, 1, 1, 3, 1, 2, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+; npc count buffer
+NPCCNT:	.BLKW	20
+
+NPSPAD:	.WORD	0	; NPC spawn points, 3 words each, 14 spawners max
+NPSPAT:	.BLKW	44	; type, x-block, y-block
+
+; NPC table (10 max)
+; NPC object: type, state, substate, spr id, x, y, timer1, timer2, data1, data2
+NPCADR:	.WORD	0
+NPCTBL:	.BLKW	100	; 10 objects by 10 words
+NPCTBE:
+
+; levels addr
+LEVTBL:	.WORD	0, LEVF01, LEVF02, LEVF03, LEVF04, LEVF05, LEVF06, LEVF07, LEVF08, LEVF09
+	.WORD	LEVF10, LEVF11, LEVF12, LEVF13, LEVF14, LEVF15, 0
+
+LEVELA:	.WORD	0
+LEVELC:	.BLKB	192	; current playing level copy
+POWERC:	.BLKW	32	; currently assigned power-ups, [pwr-type, k-addr]
+
+; pwr-ups data (level addr - 16. bytes)
+	.BYTE	015, 015,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+; level data
+LEVF01:	.BYTE	016, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 021
+	.BYTE	022,   0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   0, 001,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   0, 001, 002, 001,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022, 129, 001, 002, 003, 002, 001,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0, 001, 002, 003, 002, 001,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   0, 001, 002, 001,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   0, 001,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	026, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 027
+	
+	.BYTE	015, 014,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+LEVF02:	.BYTE	016, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 021
+	.BYTE	022,   0,  03,   0, 129,   0,   0,   0,  03,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,  04,  02,  04,   0,   0,   0,  04,  02,  04,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,  03,   0,   0,  06,   0,   0,  03,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   0,   0,  06,   0,  06,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022, 129,   0,  06,   0,  04,   0,  06,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0,  06,   0,  04,   0,  06,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   0,   0,  06,   0,  06,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,  03,   0,   0,  06,   0,   0,  03,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,  04,  02,  04,   0,   0,   0,  04,  02,  04,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,  03,   0, 129,   0,   0,   0,  03,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	026, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 027
+	
+	.BYTE	014, 014,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+LEVF03:	.BYTE	016, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 021
+	.BYTE	022,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023, 130,   0,  01,   0,  06,   0,  01,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,  01,   0,  03,   0,  03,   0,  01,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,  01,   0,  03,   0,   0,   0,  03,   0,  01,   0,   0,   0,   0,   0,   0
+	.BYTE	022,  06,  02,   0,   0,  07,   0,   0,  02,  06,   0,   0,   0,   0,   0,   0
+	.BYTE	022,  06,  02,   0,   0,  07, 129,   0,  02,  06,   0,   0,   0,   0,   0,   0
+	.BYTE	023,  01,   0,  03,   0,   0,   0,  03,   0,  01,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,  01,   0,  03,   0,  03,   0,  01,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   0,  01,   0,  06,   0,  01,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	026, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 027
+
+	.BYTE	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+LEVF04:	.BYTE	016, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 021
+	.BYTE	022,   0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023, 131,   5,   8,   5,   8,   5,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024, 131,   8,   5,   8,   5,   8,   5,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025, 131,   5,   8,   5,   8,   5,   8,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022, 131,   8,   5,   7,   7,   8,   5,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022, 131,   5,   8,   7,   7,   5,   8,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023, 131,   8,   5,   8,   5,   8,   5,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024, 131,   5,   8,   5,   8,   5,   8,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025, 131,   0,   5,   8,   5,   8,   5,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	026, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 027
+
+	.BYTE	015, 015, 014, 014,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+LEVF05:	.BYTE	016, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 021
+	.BYTE	022,   0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   3,   7,   0,   2,   7,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   3,   7,   2,   2,   7,   2,   3,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   3,   7,   2,   2,   2,   2,   3,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0,   3,   2,   2,   2,   3,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   0,   0,   3,   2,   3,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   0,   0,   3,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	026, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 027
+
+	.BYTE	015, 015, 015,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+LEVF06:	.BYTE	016, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 021
+	.BYTE	022,   0,   0,   2,   0,   0,   2,   0,   0,   2,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   0,   6,   0,   0,   6,   0,   0,   6,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   6,   0,   0,   6,   0,   0,   6,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   0,   6,   0,   0,   6,   0,   0,   6,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0,   6,   0,   0,   6,   0,   0,   6,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0,   6, 132,   0,   6, 132,   0,   6,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   0,   6,   0,   0,   6,   0,   0,   6,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   6,   0,   0,   6,   0,   0,   6,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   0,   6,   0,   0,   6,   0,   0,   6,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0,   2,   0,   0,   2,   0,   0,   2,   0,   0,   0,   0,   0,   0
+	.BYTE	026, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 027
+
+	.BYTE	014, 014, 014,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+LEVF07:	.BYTE	016, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 021
+	.BYTE	022,   0,   0, 129,   2,   2, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   0,   2,   7,   7,   2,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   0,   2,   2,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   0,   9,   9,   9,   9,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   9,   0,   9,   9,   0,   9,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   6,   0,   9,   9,   0,   6,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   0,   0,   9,   9,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   2,   2,   2,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   0,   2,   0,   0,   2,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   9,   9, 130,   0,   9,   9,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	026, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 027
+
+	.BYTE	015, 015, 015,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+LEVF08:	.BYTE	016, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 021
+	.BYTE	022,   0,   0, 132,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   8,   5,   8,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   5,   5,   5,   0,   0,   0,   0,   6,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   8,   2,   8,   0,   0,   6,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   5,   2,   5,   0,   0,   7,   6,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022, 133,   8,   2,   8,   0,   0,   7,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   5,   2,   5,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   8,   5,   8,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   5,   8,   5,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0, 132,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	026, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 027
+
+	.BYTE	013, 013, 013, 013,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+LEVF09:	.BYTE	016, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 021
+	.BYTE	022,   0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   3,   4,   4,   4,   0,   4,   4,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   3,   3,   3,   3,   3,   4,   4,   4,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   1,   2,   3,   2,   3,   2,   3,   2,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   3,   3,   3,   3,   3,   4,   4,   4,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   0,   3,   4,   4,   4,   0,   4,   4,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	026, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 027
+
+	.BYTE	013, 013, 013, 013,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+LEVF10:	.BYTE	016, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 021
+	.BYTE	022,   0,   0,   3,   0, 129,   0,   3,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   3,   2,   3,   0,   3,   2,   3,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   3,   0,   0,   0,   3,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   0,   0,   0,   3,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022, 130,   0,   0,   3,   0,   3,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0,   0,   3,   0,   3,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   0,   0,   0,   3,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   3,   0,   0,   0,   3,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   3,   2,   3,   0,   3,   2,   3,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0,   3,   0, 129,   0,   3,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	026, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 027
+
+	.BYTE	013, 013, 013, 013,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+LEVF11:	.BYTE	016, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 021
+	.BYTE	022,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   6,   6,   6,   6,   6,   6,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   2,   0,   0,   0,   4,   4,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   6,   6,   6,   6,   6,   6,   6,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022, 129,   0,   2,   0,   0,   0,   0,   4,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022, 134,   0,   2,   0,   0,   0,   0,   4,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   6,   6,   6,   6,   6,   6,   6,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   2,   0,   0,   0,   4,   4,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   6,   6,   6,   6,   6,   6,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	026, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 027
+
+	.BYTE	015, 014,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+LEVF12:	.BYTE	016, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 021
+	.BYTE	022,   6,   0,   0,   0,   0,   0,   0,   0,   6,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   6,   0,   0,   0,   0,   0,   6,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   6,   9,   0,   9,   6,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   4,   9,   6, 134,   6,   9,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   4,   9,   0,   0,   2,   0,   0,   9,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   4,   9,   0,   0,   2,   0,   0,   9,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   4,   9,   6, 134,   6,   9,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   6,   9,   0,   9,   6,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   6,   0,   0,   0,   0,   0,   6,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   6,   0,   0,   0,   0,   0,   0,   0,   6,   0,   0,   0,   0,   0,   0
+	.BYTE	026, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 027
+
+	.BYTE	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+LEVF13:	.BYTE	016, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 021
+	.BYTE	022,   0,   0,   0,   7,   0,   6,   6,   6,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   0,   0,   7,   0,   6, 134,   6,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   0,   7,   0,   6,   0,   6,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   0,   0,   7,   0,   6,   6,   6,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   6,   6,   6,   0,   0,   0,   7,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   6, 134,   6,   0,   0,   0,   7,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   6,   0,   6,   0,   0,   0,   7,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   6,   6,   6,   0,   0,   0,   7,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	026, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 027
+
+	.BYTE	015, 015,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+LEVF14:	.BYTE	016, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 021
+	.BYTE	022,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   0,   0,   0,   0,   6,   6,   6,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   0,   0,   0,   6,   0,   6,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   6,   6,   6,   0,   6,   6,   6,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022, 129,   6,   2,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   6,   2,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	023,   0,   6,   6,   6,   0,   6,   6,   6,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	024,   0,   0,   0,   0,   0,   6,   0,   6,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	025,   0,   0,   0,   0,   0,   6,   6,   6,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	022,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	026, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 027
+
+	.BYTE	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+LEVF15:	.BYTE	028, 028, 028, 028, 028, 028, 028, 028, 028, 028, 028, 028, 028, 028, 028, 028
+	.BYTE	000,   0,   0,   0,   0,   0,   0,  30,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	000,   0,   0,   0,   0,   0,   0,  30,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	000,   0,   0,   0,   0,   0,   0,  30,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	000,   0,   0,   0,   0,   0,   0,  30,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	000,   0,   0,   0,   0,   0,   0,  30,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	000,   0,   0,   0,   0,   0,   0,  30,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	000,   0,   0,   0,   0,   0,   0,  30,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	000,   0,   0,   0,   0,   0,   0,  30,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	000,   0,   0,   0,   0,   0,   0,  30,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	000,   0,   0,   0,   0,   0,   0,  30,   0,   0,   0,   0,   0,   0,   0,   0
+	.BYTE	029, 029, 029, 029, 029, 029, 029, 029, 029, 029, 029, 029, 029, 029, 029, 029
+	
+;	.BYTE	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+;LEVF00:	.BYTE	016, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 021
+;	.BYTE	022,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+;	.BYTE	023,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+;	.BYTE	024,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+;	.BYTE	025,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+;	.BYTE	022,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+;	.BYTE	022,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+;	.BYTE	023,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+;	.BYTE	024,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+;	.BYTE	025,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+;	.BYTE	022,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+;	.BYTE	026, 017, 018, 017, 019, 018, 017, 020, 020, 018, 017, 019, 018, 017, 018, 027
+	
+	
+; default spr ID for all levels to load
+DEFSPR:	.WORD	1
+	.WORD	2, 3, 4, 5
+	.WORD	10, 11, 12, 13, 14, 15
+	.WORD	20, 21, 22, 23, 24, 25, 26, 27
+	.WORD	44, 45, 46, 47
+	.WORD	0
+
+; field object block sprites table
+BGOTBL:	.WORD	0
+	.WORD	CFI001, CFI002, CFI003, CFI004, CFI005
+	.WORD	CFI006, CFI007, CFI008, CFI009, 0
+	.WORD	0, 0, CFI013, CFI014, CFI015
+	.WORD	CFI016, CFI017, CFI018, CFI019, CFI020
+	.WORD	CFI021, CFI022, CFI023, CFI024, CFI025
+	.WORD	CFI026, CFI027, CFI028, CFI029, CFI030
+	.WORD	0
+
+; blocks power (3 - unbreakable)
+BGOPWR:	.BYTE	0, 1, 1, 1, 1, 1, 2, 3	; 00..07
+	.BYTE	1, 1, 1, 1, 1, 1, 1, 1	; 08..15
+	.EVEN
+
+; sprites table	
+SPRTBL:	.WORD	0, SPR001, SPR002, SPR003, SPR004, SPR005, SPR006, 0, 0, 0
+	.WORD	SPR010, SPR011, SPR012, SPR013, SPR014, SPR015, 0, 0, 0, 0
+	.WORD	SPR020, SPR021, SPR022, SPR023, SPR024, SPR025, SPR026, SPR027, 0, 0
+	.WORD	SPR030, SPR031, SPR032, SPR033, SPR034, SPR035, SPR036, SPR037, SPR038, 0
+	.WORD	SPR040, SPR041, SPR042, SPR043, SPR044, SPR045, SPR046, SPR047, 0, 0
+	.WORD	SPR050, SPR051, SPR052, SPR053, 0, 0, 0, 0, 0, 0
+
+; levels sprites IDs
+LEVSPT:	.WORD	0, LEVS01, LEVS02, LEVS03, LEVS04, LEVS05, LEVS06, LEVS07, LEVS08, LEVS09
+	.WORD	LEVS10, LEVS11, LEVS12, LEVS13, LEVS14, LEVS15, 0
+	
+LEVS01:	.WORD	0
+LEVS02:	.WORD	0
+LEVS03:	.WORD	30, 31, 32, 33, 34, 0	; 'hive' & 'bee'
+LEVS04:	.WORD	33, 34, 0
+LEVS05:	.WORD	0
+LEVS06:	.WORD	35, 36, 37, 38, 0	; 'romb'
+LEVS07:	.WORD	30, 31, 32, 33, 34, 0	; 'hive' & 'bee'
+LEVS08:	.WORD	35, 36, 37, 38, 40, 41, 42, 43, 0	; 'romb' and 'bowling'
+LEVS09:	.WORD	0
+LEVS10:	.WORD	30, 31, 32, 33, 34, 0	; 'hive' & 'bee'
+LEVS11:	.WORD	50, 51, 52, 53, 0	; 'npc bat'
+LEVS12:	.WORD	50, 51, 52, 53, 0	; 'npc bat'
+LEVS13:	.WORD	50, 51, 52, 53, 0	; 'npc bat'
+LEVS14:	.WORD	0
+LEVS15:	.WORD	6, 0			; 'square' ball
+
+; animation state 0 - emerging sprites
+SPT000:	.WORD	2, 3, 4, 5, 0
+; animation state 255 - dying
+SPT255:	.WORD	20, 21, 22, 23, 24, 25, 26, 27, 0
+; animation state 1 - 'face' npc
+SPT001:	.WORD	10, 11, 12, 13, 11, 10, 15, 14, 0
+; animation 2 - 'hive' npc
+SPT002: .WORD	30, 31, 32, 0
+; 'bee' animation
+SPT003: .WORD	33, 34, 0
+; 'romb' animation
+SPT004:	.WORD	35, 36, 37, 38, 37, 36, 0
+; 'bowling' animation
+SPT005:	.WORD	40, 41, 42, 43, 0
+; 'stunned' animation
+SPT006:	.WORD	44, 45, 46, 47, 0
+; 'npc bat' animation
+SPT007:	.WORD	50, 51, 52, 53, 0
+
+
+; kub eff 1
+SKT001:	.WORD	CSP010, CSP011, CSP012, CSP013, CSP014, CSP015, CSP016, CSP017, 0
+; kub eff 3
+SKT003:	.WORD	CSP030, CSP031, CSP032, CSP033, CSP034, CSP035, CSP036, 0
+
+
+; /// TABLES ///////////////////////////////////////////////////////////////////
+.radix	8	
+
+; movements by angle 0..127 (in float), dx, dy
+TBALPH:	.WORD	64.,0., 63.,3., 63.,6., 63.,9., 62.,12., 62.,15., 61.,18., 60.,21., 59.,24.
+	.WORD	57.,27., 56.,30., 54.,32., 53.,35., 51.,38., 49.,40., 47.,42., 45.,45., 42.,47.
+	.WORD	40.,49., 38.,51., 35.,53., 32.,54., 30.,56., 27.,57., 24.,59., 21.,60., 18.,61.
+	.WORD	15.,62., 12.,62., 9.,63., 6.,63., 3.,63., 0.,64., -3.,63., -6.,63., -9.,63.
+	.WORD	-12.,62., -15.,62., -18.,61., -21.,60., -24.,59., -27.,57., -30.,56., -32.,54., -35.,53.
+	.WORD	-38.,51., -40.,49., -42.,47., -45.,45., -47.,42., -49.,40., -51.,38., -53.,35., -54.,32.
+	.WORD	-56.,30., -57.,27., -59.,24., -60.,21., -61.,18., -62.,15., -62.,12., -63.,9., -63.,6.
+	.WORD	-63.,3., -64.,0., -63.,-3., -63.,-6., -63.,-9., -62.,-12., -62.,-15., -61.,-18., -60.,-21.
+	.WORD	-59.,-24., -57.,-27., -56.,-30., -54.,-32., -53.,-35., -51.,-38., -49.,-40., -47.,-42., -45.,-45.
+	.WORD	-42.,-47., -40.,-49., -38.,-51., -35.,-53., -32.,-54., -30.,-56., -27.,-57., -24.,-59., -21.,-60.
+	.WORD	-18.,-61., -15.,-62., -12.,-62., -9.,-63., -6.,-63., -3.,-63., 0.,-64., 3.,-63., 6.,-63.
+	.WORD	9.,-63., 12.,-62., 15.,-62., 18.,-61., 21.,-60., 24.,-59., 27.,-57., 30.,-56., 32.,-54.
+	.WORD	35.,-53., 38.,-51., 40.,-49., 42.,-47., 45.,-45., 47.,-42., 49.,-40., 51.,-38., 53.,-35.
+	.WORD	54.,-32., 56.,-30., 57.,-27., 59.,-24., 60.,-21., 61.,-18., 62.,-15., 62.,-12., 63.,-9.
+	.WORD	63.,-6., 63.,-3.
+
+; convert k-coord to vaddr
+KUB2VA:	.WORD	107404,107406,107410,107412,107414,107416,107420,107422,107424,107426
+	.WORD	107430,107432,107434,107436,107440,107442,112004,112006,112010,112012
+	.WORD	112014,112016,112020,112022,112024,112026,112030,112032,112034,112036
+	.WORD	112040,112042,114404,114406,114410,114412,114414,114416,114420,114422
+	.WORD	114424,114426,114430,114432,114434,114436,114440,114442,117004,117006
+	.WORD	117010,117012,117014,117016,117020,117022,117024,117026,117030,117032
+	.WORD	117034,117036,117040,117042,121404,121406,121410,121412,121414,121416
+	.WORD	121420,121422,121424,121426,121430,121432,121434,121436,121440,121442
+	.WORD	124004,124006,124010,124012,124014,124016,124020,124022,124024,124026
+	.WORD	124030,124032,124034,124036,124040,124042,126404,126406,126410,126412
+	.WORD	126414,126416,126420,126422,126424,126426,126430,126432,126434,126436
+	.WORD	126440,126442,131004,131006,131010,131012,131014,131016,131020,131022
+	.WORD	131024,131026,131030,131032,131034,131036,131040,131042,133404,133406
+	.WORD	133410,133412,133414,133416,133420,133422,133424,133426,133430,133432
+	.WORD	133434,133436,133440,133442,136004,136006,136010,136012,136014,136016
+	.WORD	136020,136022,136024,136026,136030,136032,136034,136036,136040,136042
+	.WORD	140404,140406,140410,140412,140414,140416,140420,140422,140424,140426
+	.WORD	140430,140432,140434,140436,140440,140442,143004,143006,143010,143012
+	.WORD	143014,143016,143020,143022,143024,143026,143030,143032,143034,143036
+	.WORD	143040,143042
+
+; y-coord to vram table
+LINEAD:	.WORD	100000,100120,100240,100360,100500,100620,100740,101060,101200,101320
+	.WORD	101440,101560,101700,102020,102140,102260,102400,102520,102640,102760
+	.WORD	103100,103220,103340,103460,103600,103720,104040,104160,104300,104420
+	.WORD	104540,104660,105000,105120,105240,105360,105500,105620,105740,106060
+	.WORD	106200,106320,106440,106560,106700,107020,107140,107260,107400,107520
+	.WORD	107640,107760,110100,110220,110340,110460,110600,110720,111040,111160
+	.WORD	111300,111420,111540,111660,112000,112120,112240,112360,112500,112620
+	.WORD	112740,113060,113200,113320,113440,113560,113700,114020,114140,114260
+	.WORD	114400,114520,114640,114760,115100,115220,115340,115460,115600,115720
+	.WORD	116040,116160,116300,116420,116540,116660,117000,117120,117240,117360
+	.WORD	117500,117620,117740,120060,120200,120320,120440,120560,120700,121020
+	.WORD	121140,121260,121400,121520,121640,121760,122100,122220,122340,122460
+	.WORD	122600,122720,123040,123160,123300,123420,123540,123660,124000,124120
+	.WORD	124240,124360,124500,124620,124740,125060,125200,125320,125440,125560
+	.WORD	125700,126020,126140,126260,126400,126520,126640,126760,127100,127220
+	.WORD	127340,127460,127600,127720,130040,130160,130300,130420,130540,130660
+	.WORD	131000,131120,131240,131360,131500,131620,131740,132060,132200,132320
+	.WORD	132440,132560,132700,133020,133140,133260,133400,133520,133640,133760
+	.WORD	134100,134220,134340,134460,134600,134720,135040,135160,135300,135420
+	.WORD	135540,135660,136000,136120,136240,136360,136500,136620,136740,137060
+	.WORD	137200,137320,137440,137560,137700,140020,140140,140260,140400,140520
+	.WORD	140640,140760,141100,141220,141340,141460,141600,141720,142040,142160
+	.WORD	142300,142420,142540,142660,143000,143120,143240,143360,143500,143620
+	.WORD	143740,144060,144200,144320,144440,144560,144700,145020,145140,145260
+	.WORD	145400,145520,145640,145760,146100,146220,146340,146460,146600,146720
+	.WORD	147040,147160,147300,147420,147540,147660,150000,150120,150240,150360
+	.WORD	150500,150620,150740,151060,151200,151320,151440,151560,151700,152020
+	.WORD	152140,152260,152400,152520,152640,152760,153100,153220,153340,153460
+	.WORD	153600,153720,154040,154160,154300,154420,154540,154660
+
+; //////////////////////////////////////////////////////////////////////////////	
+; // SPR DATA
+
+SPRERR:	.BYTE	177, 177, 177, 101, 101, 101, 175, 135, 135, 101, 101, 101
+	.BYTE	175, 165, 165, 101, 155, 155, 177, 177, 177, 0
+
+; 4x5 bitnumbers
+SPAL40:	.BYTE	7,5,5,5,7,0,0,0, 2,2,2,2,2,0,0,0
+	.BYTE	7,4,7,1,7,0,0,0, 7,4,6,4,7,0,0,0
+	.BYTE	5,5,7,4,4,0,0,0, 7,1,7,4,7,0,0,0
+	.BYTE	7,1,7,5,7,0,0,0, 7,4,4,4,4,0,0,0
+	.BYTE	7,5,7,5,7,0,0,0, 7,5,7,4,7,0,0,0
+	
+; font 8x6 offsets
+FN6OFS:	.WORD	0, 14, 30, 44, 60, 74, 110, 124
+	.WORD	140, 154, 170, 204, 220, 234, 250, 264
+	.WORD	300, 314, 330, 344, 360, 374, 410, 424
+	.WORD	440, 454, 470, 504, 520, 534, 550, 564
+	.WORD	600, 614, 630, 644, 660, 674, 710, 724
+	.WORD	740, 754, 770, 1004, 1020, 1034, 1050, 1064
+	.WORD	1100, 1114, 1130, 1144, 1160, 1174, 1210, 1224
+	.WORD	1240, 1254, 1270, 1304, 1320, 1334, 1350, 1364
+
+; font 8x6 data
+FN6DAT:	.WORD	0, 0, 0, 0, 0, 0
+	.WORD	14030, 14030, 14030, 14030, 0, 14030
+	.WORD	24050, 0, 0, 0, 0, 0
+	.WORD	0, 24050, 76174, 24050, 76174, 24050
+	.WORD	10020, 76174, 12024, 76174, 50120, 76174
+	.WORD	0, 63146, 30060, 14030, 146314, 0
+	.WORD	0, 14030, 22044, 136274, 41102, 36074
+	.WORD	10020, 0, 0, 0, 0, 0
+	.WORD	30060, 14030, 14030, 14030, 14030, 30060
+	.WORD	14030, 30060, 30060, 30060, 30060, 14030
+	.WORD	0, 22044, 14030, 36074, 14030, 22044
+	.WORD	0, 14030, 14030, 77176, 14030, 14030
+	.WORD	0, 0, 0, 0, 14030, 10020
+	.WORD	0, 0, 0, 36074, 0, 0
+	.WORD	0, 0, 0, 0, 0, 14030
+	.WORD	140300, 60140, 30060, 14030, 6014, 3006
+	.WORD	77176, 41102, 41102, 141302, 141302, 177376
+	.WORD	10020, 10020, 10020, 30060, 30060, 30060
+	.WORD	37076, 61142, 140300, 177376, 1002, 177376
+	.WORD	37076, 60140, 140300, 170360, 140300, 177376
+	.WORD	70160, 54130, 46114, 43106, 177376, 40100
+	.WORD	170360, 14030, 6014, 177376, 140300, 176374
+	.WORD	170360, 14030, 6014, 177376, 143306, 177376
+	.WORD	177376, 140300, 60140, 30060, 14030, 6014
+	.WORD	17036, 31062, 41102, 177376, 101202, 177376
+	.WORD	37076, 61142, 141302, 177376, 140300, 177376
+	.WORD	0, 0, 14030, 0, 14030, 0
+	.WORD	0, 0, 14030, 0, 10020, 4010
+	.WORD	0, 30060, 14030, 6014, 14030, 30060
+	.WORD	0, 0, 36074, 0, 36074, 0
+	.WORD	0, 6014, 14030, 30060, 14030, 6014
+	.WORD	76174, 40100, 74170, 14030, 0, 14030
+	.WORD	36074, 41102, 55132, 35072, 1002, 36074
+	.WORD	140300, 160340, 130260, 174370, 106214, 103206
+	.WORD	77176, 43106, 77176, 103206, 103206, 177376
+	.WORD	170360, 114230, 6014, 3006, 3006, 177376
+	.WORD	17036, 23046, 43106, 103206, 103206, 177376
+	.WORD	37076, 3006, 77176, 3006, 3006, 177376
+	.WORD	177376, 3006, 37076, 3006, 3006, 3006
+	.WORD	170360, 114230, 6014, 143306, 103206, 177376
+	.WORD	103206, 103206, 177376, 103206, 103206, 103206
+	.WORD	34070, 10020, 10020, 10020, 10020, 34070
+	.WORD	176374, 20040, 20040, 20040, 10020, 7016
+	.WORD	43106, 43106, 77176, 143306, 103206, 103206
+	.WORD	30060, 14030, 6014, 3006, 3006, 177376
+	.WORD	177376, 133266, 133266, 133266, 103206, 103206
+	.WORD	17036, 23046, 43106, 103206, 103206, 103206
+	.WORD	170360, 114230, 106214, 103206, 103206, 177376
+	.WORD	37076, 43106, 103206, 177376, 3006, 3006
+	.WORD	170360, 114230, 106214, 123246, 143306, 177376
+	.WORD	177376, 103206, 43106, 37076, 43106, 103206
+	.WORD	174370, 106214, 3006, 177376, 100200, 177376
+	.WORD	176374, 30060, 30060, 30060, 30060, 30060
+	.WORD	103206, 103206, 103206, 106214, 114230, 170360
+	.WORD	103206, 103206, 143306, 63146, 33066, 17036
+	.WORD	103206, 103206, 103206, 133266, 133266, 147316
+	.WORD	143306, 66154, 14030, 66154, 143306, 143306
+	.WORD	103206, 103206, 177376, 100200, 40100, 37076
+	.WORD	177376, 61142, 30060, 14030, 106214, 177376
+	.WORD	34070, 14030, 14030, 14030, 14030, 34070
+	.WORD	3006, 6014, 14030, 30060, 60140, 140300
+	.WORD	34070, 30060, 30060, 30060, 30060, 34070
+	.WORD	10020, 34070, 52124, 10020, 10020, 10020
+	.WORD	10020, 10020, 10020, 52124, 34070, 10020
+ 
+; 'krakout' sprite
+CMEN01:	.WORD	14., 24.
+	.WORD	0, 0, 0, 0, 0, 0, 0, 0
+	.WORD	0, 0, 0, 100000, 0, 0, 0, 100
+	.WORD	200, 7, 0, 300, 0, 0, 40100, 0
+	.WORD	0, 100000, 1400, 0, 0, 140, 340, 37
+	.WORD	34, 200, 3, 0, 40100, 0, 0, 146000
+	.WORD	17400, 0, 0, 160, 370, 77, 370, 203
+	.WORD	17, 0, 171362, 0, 140000, 163400, 177400, 400
+	.WORD	0, 174, 376, 77, 370, 201, 207, 3
+	.WORD	177376, 3407, 110000, 61400, 176000, 7400, 0, 75
+	.WORD	74, 74, 370, 201, 207, 37, 177376, 1403
+	.WORD	7400, 21400, 176000, 7400, 300, 70, 70, 70
+	.WORD	370, 201, 303, 17, 177376, 1403, 7000, 1400
+	.WORD	36000, 7000, 360, 70, 170, 30, 230, 301
+	.WORD	303, 3, 7017, 7417, 7000, 3400, 36000, 2000
+	.WORD	370, 60, 160, 30, 230, 303, 343, 100201
+	.WORD	161743, 1403, 7000, 3400, 37000, 2000, 360, 60
+	.WORD	160, 10, 14, 303, 343, 140300, 150721, 16034
+	.WORD	6000, 3400, 17000, 2000, 340, 161, 360, 14
+	.WORD	14, 303, 363, 170360, 70160, 37477, 16000, 3000
+	.WORD	17000, 0, 340, 371, 340, 17, 14, 303
+	.WORD	177, 160340, 124250, 37477, 16000, 7000, 17000, 0
+	.WORD	300, 373, 341, 34, 376, 303, 177, 60140
+	.WORD	152324, 17437, 16000, 7000, 7400, 0, 300, 377
+	.WORD	343, 74, 376, 347, 177, 70160, 164350, 17437
+	.WORD	16000, 7000, 7400, 0, 200, 377, 347, 170
+	.WORD	216, 347, 163, 74170, 163346, 7417, 36000, 7000
+	.WORD	7400, 0, 200, 237, 217, 371, 4, 347
+	.WORD	171, 170360, 165753, 40501, 34000, 6000, 7400, 0
+	.WORD	0, 237, 177, 361, 3, 347, 171, 70160
+	.WORD	2004, 60140, 34000, 116000, 3400, 0, 0, 37
+	.WORD	277, 343, 3, 347, 170, 74170, 2004, 34070
+	.WORD	34000, 116000, 3400, 0, 0, 36, 336, 307
+	.WORD	5, 367, 170, 60140, 2004, 36475, 34000, 116000
+	.WORD	3400, 0, 0, 76, 340, 17, 6, 373
+	.WORD	160, 140300, 1002, 23046, 74000, 157000, 3400, 0
+	.WORD	0, 74, 160, 200, 7, 303, 361, 160340
+	.WORD	1002, 10020, 170000, 7400, 3000, 0, 0, 374
+	.WORD	10, 300, 217, 37, 342, 0, 401, 0
+	.WORD	170000, 7400, 4000, 0, 0, 34, 0, 60
+	.WORD	0, 60, 200, 1, 2004, 0, 160000, 3400
+	.WORD	0, 0, 0, 4, 0, 0, 0, 0
+	.WORD	0, 0, 70160, 0, 100000, 0, 0, 0 
+
+CFI001:	.WORD	2., 16.
+	.WORD	374, 77, 374, 77, 374, 77, 374, 77
+	.WORD	374, 77, 374, 77, 374, 77, 374, 77
+	.WORD	374, 77, 374, 77, 374, 77, 374, 77
+	.WORD	374, 77, 374, 77, 374, 77, 0, 0
+CFI002:	.WORD	2., 16.
+	.WORD	176000, 37400, 176000, 37400, 176000, 37400, 176000, 37400
+	.WORD	176000, 37400, 176000, 37400, 176000, 37400, 176000, 37400
+	.WORD	176000, 37400, 176000, 37400, 176000, 37400, 176000, 37400
+	.WORD	176000, 37400, 176000, 37400, 176000, 37400, 0, 0
+CFI003:	.WORD	2., 16.
+	.WORD	176374, 37477, 176374, 37477, 176374, 37477, 176374, 37477
+	.WORD	176374, 37477, 176374, 37477, 176374, 37477, 176374, 37477
+	.WORD	176374, 37477, 176374, 37477, 176374, 37477, 176374, 37477
+	.WORD	176374, 37477, 176374, 37477, 176374, 37477, 0, 0
+CFI004:	.WORD	2., 16.
+	.WORD	170000, 7400, 174000, 17400, 16000, 34000, 166000, 33400
+	.WORD	166000, 33400, 166000, 33400, 166000, 33400, 166000, 33400
+	.WORD	166000, 33400, 166000, 33400, 166000, 33400, 166000, 33400
+	.WORD	16000, 34000, 174000, 17400, 170000, 7400, 0, 0
+CFI005:	.WORD	2., 16.
+	.WORD	176000, 37400, 2000, 20000, 62000, 23400, 122000, 21400
+	.WORD	142000, 22400, 162000, 23000, 62000, 23400, 122000, 21400
+	.WORD	142000, 22400, 162000, 23000, 62000, 23400, 122000, 21400
+	.WORD	142000, 22400, 2000, 20000, 176000, 37400, 0, 0 
+CFI006:	.WORD	2., 16.
+	.WORD	176374, 37477, 2004, 32465, 2004, 25052, 42104, 32465
+	.WORD	122244, 25052, 42104, 32465, 122244, 25052, 42104, 32465
+	.WORD	126254, 25052, 52124, 32465, 126254, 25052, 52124, 32465
+	.WORD	126254, 25052, 52124, 32465, 176374, 37477, 0, 0 	
+CFI007:	.WORD	2., 16.
+	.WORD	176374, 37477, 52124, 32465, 126254, 25052, 52124, 32465
+	.WORD	126254, 25052, 52124, 32465, 126254, 25052, 52124, 32465
+	.WORD	126254, 25052, 52124, 32465, 126254, 25052, 52124, 32465
+	.WORD	126254, 25052, 52124, 32465, 176374, 37477, 0, 0
+CFI008:	.WORD	2., 16.
+	.WORD	374, 77, 4, 40, 60004, 3440, 120004, 1440
+	.WORD	140004, 444, 160004, 46, 60004, 47, 20204, 43
+	.WORD	304, 2041, 344, 3040, 144, 3440, 100044, 1440
+	.WORD	140004, 2440, 4, 40, 374, 77, 0, 0
+CFI009:	.WORD	2., 16.
+	.WORD	374, 77, 14, 60, 120014, 3467, 4, 40
+	.WORD	150204, 7457, 150204, 7457, 4, 40, 150204, 7457
+	.WORD	150204, 7457, 150204, 7457, 4, 40, 120004, 3447
+	.WORD	120014, 3467, 14, 60, 374, 77, 0, 0
+CFI013:	.WORD	2., 16.
+	.WORD	154000, 37, 0, 0, 166000, 77, 26000, 70
+	.WORD	26000, 60, 26000, 67, 26000, 67, 26000, 70
+	.WORD	26000, 47, 26000, 47, 26000, 40, 26000, 60
+	.WORD	166000, 77, 0, 0, 154000, 17, 0, 0 
+CFI014:	.WORD	2., 16.
+	.WORD	154000, 37, 0, 0, 166000, 77, 26000, 70
+	.WORD	26000, 70, 26000, 77, 26000, 77, 26000, 41
+	.WORD	26000, 41, 26000, 47, 26000, 40, 66000, 40
+	.WORD	166000, 77, 0, 0, 154000, 17, 0, 0
+CFI015:	.WORD	2., 16.
+	.WORD	154000, 37, 0, 0, 166000, 77, 26000, 40
+	.WORD	26000, 40, 26000, 77, 26000, 77, 26000, 70
+	.WORD	26000, 77, 26000, 77, 26000, 40, 66000, 40
+	.WORD	166000, 77, 0, 0, 154000, 17, 0, 0 
+CFI016:	.WORD	2., 16.
+	.WORD	0, 77577, 100200, 40501, 140300, 77176, 60140, 77577
+	.WORD	130260, 77577, 154330, 57537, 166354, 57537, 173366, 57537
+	.WORD	175773, 47517, 176775, 43507, 176775, 41503, 176775, 40501
+	.WORD	176775, 40100, 16435, 40100, 177777, 77577, 0, 0
+CFI017:	.WORD	2., 16.
+	.WORD	0, 0, 174370, 177777, 125252, 125252, 51122, 52525
+	.WORD	175372, 177777, 51122, 52525, 175372, 177777, 175372, 177777
+	.WORD	372, 377, 372, 377, 252, 252, 122, 125
+	.WORD	250, 252, 2, 0, 250, 252, 0, 0
+CFI018:	.WORD	2., 16.
+	.WORD	0, 0, 177777, 17437, 125252, 45112, 52525, 52525
+	.WORD	177777, 57537, 52525, 52525, 177777, 57537, 177777, 57537
+	.WORD	377, 137, 377, 137, 252, 112, 125, 125
+	.WORD	252, 12, 0, 100, 252, 12, 0, 0
+CFI019:	.WORD	2., 16.
+	.WORD	0, 0, 114631, 114631, 104210, 104210, 10421, 10421
+	.WORD	114631, 114631, 10421, 10421, 114631, 114631, 114631, 114631
+	.WORD	231, 231, 231, 231, 210, 210, 21, 21
+	.WORD	210, 210, 0, 0, 210, 210, 0, 0
+CFI020:	.WORD	2., 16.
+	.WORD	0, 0, 177777, 177777, 125252, 125252, 52525, 52525
+	.WORD	177777, 177777, 52525, 52525, 177777, 177777, 177777, 177777
+	.WORD	377, 377, 377, 377, 252, 252, 125, 125
+	.WORD	252, 252, 0, 0, 252, 252, 0, 0
+CFI021:	.WORD	2., 16.
+	.WORD	177376, 0, 101202, 401, 175372, 1403, 175372, 3407
+	.WORD	175372, 7417, 175372, 17437, 175372, 37477, 175372, 77577
+	.WORD	175372, 157737, 175372, 137677, 175372, 137677, 175372, 117637
+	.WORD	175372, 107617, 35072, 100200, 177376, 177777, 0, 0
+CFI022:	.WORD	2., 16.
+	.WORD	0, 0, 176374, 57, 0, 0, 175372, 13
+	.WORD	153326, 127, 175372, 13, 153326, 127, 175372, 13
+	.WORD	153326, 127, 175372, 13, 153326, 127, 175372, 13
+	.WORD	153326, 127, 0, 0, 176374, 57, 0, 0
+CFI023:	.WORD	2., 16.
+	.WORD	0, 0, 176374, 57, 0, 0, 175372, 13
+	.WORD	153326, 127, 175372, 13, 153326, 127, 175372, 13
+	.WORD	153326, 127, 175372, 13, 153326, 127, 175372, 13
+	.WORD	153326, 127, 175372, 13, 153326, 127, 175372, 13
+CFI024:	.WORD	2., 16.
+	.WORD	153326, 127, 0, 0, 0, 0, 175372, 13
+	.WORD	153326, 127, 0, 0, 0, 0, 175372, 13
+	.WORD	153326, 127, 0, 0, 0, 0, 175372, 13
+	.WORD	153326, 127, 0, 0, 0, 0, 175372, 13
+CFI025:	.WORD	2., 16.
+	.WORD	153326, 127, 175372, 13, 153326, 127, 175372, 13
+	.WORD	153326, 127, 175372, 13, 153326, 127, 175372, 13
+	.WORD	153326, 127, 175372, 13, 153326, 127, 175372, 13
+	.WORD	153326, 127, 0, 0, 176374, 57, 0, 0
+CFI026:	.WORD	2., 16.
+	.WORD	0, 0, 177777, 77577, 401, 40100, 176775, 77577
+	.WORD	176775, 77577, 176775, 77577, 176775, 57537, 175773, 57537
+	.WORD	173366, 57537, 166354, 57537, 154330, 57537, 130260, 47517
+	.WORD	60140, 47517, 140300, 43106, 100200, 41503, 0, 77577
+CFI027:	.WORD	2., 16.
+	.WORD	0, 0, 177376, 177777, 1002, 140300, 175372, 177777
+	.WORD	175372, 157737, 175372, 157737, 175372, 147717, 175372, 147717
+	.WORD	175372, 63547, 175372, 33467, 175372, 15433, 175372, 6415
+	.WORD	175372, 3006, 75172, 1403, 135272, 401, 177376, 0 
+CFI028:	.WORD	2., 16.
+	.WORD	0, 0, 0, 0, 0, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0, 0, 0, 0
+	.WORD	177777, 177777, 177777, 177777, 177777, 177777, 177777, 177777
+	.WORD	177777, 177777, 177777, 177777, 177777, 177777, 177777, 177777
+CFI029:	.WORD	2., 16.
+	.WORD	177777, 177777, 177777, 177777, 177777, 177777, 177777, 177777
+	.WORD	177777, 177777, 177777, 177777, 177777, 177777, 177777, 177777
+	.WORD	0, 0, 0, 0, 0, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0, 0, 0, 0 
+CFI030:	.WORD	2., 16.
+	.WORD	0, 0, 0, 0, 0, 100200, 0, 100200
+	.WORD	0, 100200, 0, 100200, 0, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0, 100200, 0, 100200
+	.WORD	0, 100200, 0, 100200, 0, 0, 0, 0 
+	
+; small bat sprite
+CSP001:	.WORD	1., 12.
+	.WORD	3026, 0, 3457, 3457, 3457, 3457, 3457, 3457
+	.WORD	3457, 3457, 0, 3026 
+; 'game over'
+CSP002:	.WORD	11., 39.
+	.WORD	0, 0, 0, 0, 0, 0, 0, 0
+	.WORD	0, 0, 0, 17020, 2004, 40501, 10020, 2004
+	.WORD	40501, 10020, 2004, 40501, 10020, 36004, 21040, 105212
+	.WORD	121242, 24050, 105212, 121242, 24050, 105212, 121242, 24050
+	.WORD	21002, 41100, 50521, 12024, 42505, 50521, 12024, 42505
+	.WORD	50521, 12024, 42505, 20401, 101202, 20040, 4010, 101202
+	.WORD	20040, 4010, 101202, 20040, 4010, 101202, 20040, 2004
+	.WORD	0, 0, 0, 0, 0, 0, 0, 0
+	.WORD	0, 10020, 4010, 0, 0, 0, 0, 0
+	.WORD	0, 0, 0, 0, 4010, 10020, 0, 0
+	.WORD	0, 0, 0, 0, 0, 0, 0, 2004
+	.WORD	4010, 0, 0, 0, 0, 0, 0, 0
+	.WORD	0, 0, 4010, 2004, 0, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0, 10020, 1002, 0
+	.WORD	0, 0, 0, 0, 0, 0, 0, 0
+	.WORD	20040, 2004, 0, 0, 0, 0, 0, 0
+	.WORD	0, 0, 0, 10020, 4010, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0, 0, 4010, 10020
+	.WORD	74170, 60140, 77577, 17437, 0, 74170, 41503, 17437
+	.WORD	77577, 2004, 4010, 74170, 60140, 77577, 17437, 0
+	.WORD	74170, 41503, 17437, 77577, 4010, 2004, 46114, 70160
+	.WORD	55533, 1403, 0, 46114, 41503, 1403, 41503, 10020
+	.WORD	1002, 46114, 70160, 55533, 1403, 0, 46114, 41503
+	.WORD	1403, 41503, 20040, 2004, 3006, 54130, 55533, 37477
+	.WORD	0, 43106, 61543, 37477, 21443, 10020, 4010, 3006
+	.WORD	54130, 55533, 37477, 0, 43106, 61543, 37477, 21443
+	.WORD	4010, 10020, 61543, 76174, 55533, 1403, 0, 41503
+	.WORD	31463, 1403, 17437, 2004, 4010, 61543, 76174, 55533
+	.WORD	1403, 0, 41503, 31463, 1403, 17437, 4010, 2004
+	.WORD	41503, 43106, 41503, 1403, 0, 41503, 15433, 1403
+	.WORD	21443, 10020, 1002, 41503, 43106, 41503, 1403, 0
+	.WORD	41503, 15433, 1403, 21443, 20040, 2004, 77577, 41503
+	.WORD	41503, 77577, 0, 77577, 7417, 77577, 41503, 10020
+	.WORD	4010, 77577, 41503, 41503, 77577, 0, 77577, 7417
+	.WORD	77577, 41503, 4010, 10020, 0, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0, 2004, 4010, 0
+	.WORD	0, 0, 0, 0, 0, 0, 0, 0
+	.WORD	4010, 2004, 0, 0, 0, 0, 0, 0
+	.WORD	0, 0, 0, 10020, 1002, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0, 0, 20040, 2004
+	.WORD	0, 0, 0, 0, 0, 0, 0, 0
+	.WORD	0, 10020, 4010, 0, 0, 0, 0, 0
+	.WORD	0, 0, 0, 0, 4010, 10020, 0, 0
+	.WORD	0, 0, 0, 0, 0, 0, 0, 2004
+	.WORD	4010, 0, 0, 0, 0, 0, 0, 0
+	.WORD	0, 0, 4010, 2004, 0, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0, 10020, 101202, 20040
+	.WORD	4010, 101202, 20040, 4010, 101202, 20040, 4010, 101202
+	.WORD	20040, 41100, 50521, 12024, 42505, 50521, 12024, 42505
+	.WORD	50521, 12024, 42505, 20401, 21040, 105212, 121242, 24050
+	.WORD	105212, 121242, 24050, 105212, 121242, 24050, 21002, 17020
+	.WORD	2004, 40501, 10020, 2004, 40501, 10020, 2004, 40501
+	.WORD	10020, 36004, 0, 0, 0, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0 
+
+; 'you win'
+CSP003:	.WORD	11., 39.
+	.WORD	0, 0, 0, 0, 0, 0, 0, 0
+	.WORD	0, 0, 0, 17020, 2004, 40501, 10020, 2004
+	.WORD	40501, 10020, 2004, 40501, 10020, 36004, 21040, 105212
+	.WORD	121242, 24050, 105212, 121242, 24050, 105212, 121242, 24050
+	.WORD	21002, 41100, 50521, 12024, 42505, 50521, 12024, 42505
+	.WORD	50521, 12024, 42505, 20401, 101202, 20040, 4010, 101202
+	.WORD	20040, 4010, 101202, 20040, 4010, 101202, 20040, 2004
+	.WORD	0, 0, 0, 0, 0, 0, 0, 0
+	.WORD	0, 10020, 4010, 0, 0, 0, 0, 0
+	.WORD	0, 0, 0, 0, 4010, 10020, 0, 0
+	.WORD	0, 0, 0, 0, 0, 0, 0, 2004
+	.WORD	4010, 177777, 177777, 177777, 177777, 177777, 177777, 177777
+	.WORD	177777, 37477, 4010, 2004, 0, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0, 10020, 1002, 177777
+	.WORD	177777, 177777, 177777, 177777, 177777, 177777, 177777, 37477
+	.WORD	20040, 2004, 177777, 177777, 177777, 177777, 177777, 177777
+	.WORD	177777, 177777, 37477, 10020, 4010, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0, 0, 4010, 10020
+	.WORD	0, 0, 0, 0, 0, 0, 0, 0
+	.WORD	0, 2004, 4010, 107617, 143707, 7417, 103607, 1403
+	.WORD	163747, 134671, 71563, 34070, 4010, 2004, 107216, 161743
+	.WORD	17437, 103607, 1403, 163747, 134671, 171763, 34070, 10020
+	.WORD	1002, 156334, 170761, 36074, 103607, 1403, 163346, 114631
+	.WORD	171763, 34471, 20040, 2004, 176374, 70561, 34070, 103607
+	.WORD	1403, 167356, 116635, 171763, 34471, 10020, 4010, 174370
+	.WORD	70160, 34070, 103607, 1403, 177376, 117637, 171763, 35473
+	.WORD	4010, 10020, 70160, 70160, 34070, 103607, 1403, 37076
+	.WORD	117637, 71563, 37477, 2004, 4010, 70160, 70160, 34070
+	.WORD	103607, 1403, 37076, 117637, 71563, 37477, 4010, 2004
+	.WORD	70160, 170360, 36074, 147717, 401, 36074, 107617, 71563
+	.WORD	37076, 10020, 1002, 70160, 160340, 17437, 177376, 401
+	.WORD	36074, 107617, 71563, 36074, 20040, 2004, 70160, 140300
+	.WORD	7417, 176374, 0, 16034, 107216, 71563, 36074, 10020
+	.WORD	4010, 0, 0, 0, 0, 0, 0, 0
+	.WORD	0, 0, 4010, 10020, 0, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0, 2004, 4010, 177777
+	.WORD	177777, 177777, 177777, 177777, 177777, 177777, 177777, 37477
+	.WORD	4010, 2004, 177777, 177777, 177777, 177777, 177777, 177777
+	.WORD	177777, 177777, 37477, 10020, 1002, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0, 0, 20040, 2004
+	.WORD	177777, 177777, 177777, 177777, 177777, 177777, 177777, 177777
+	.WORD	37477, 10020, 4010, 0, 0, 0, 0, 0
+	.WORD	0, 0, 0, 0, 4010, 10020, 0, 0
+	.WORD	0, 0, 0, 0, 0, 0, 0, 2004
+	.WORD	4010, 0, 0, 0, 0, 0, 0, 0
+	.WORD	0, 0, 4010, 2004, 0, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0, 10020, 101202, 20040
+	.WORD	4010, 101202, 20040, 4010, 101202, 20040, 4010, 101202
+	.WORD	20040, 41100, 50521, 12024, 42505, 50521, 12024, 42505
+	.WORD	50521, 12024, 42505, 20401, 21040, 105212, 121242, 24050
+	.WORD	105212, 121242, 24050, 105212, 121242, 24050, 21002, 17020
+	.WORD	2004, 40501, 10020, 2004, 40501, 10020, 2004, 40501
+	.WORD	10020, 36004, 0, 0, 0, 0, 0, 0
+	.WORD	0, 0, 0, 0, 0 
+	
+CSP010:	.WORD	2., 16.
+	.WORD	177777, 177777, 177777, 177777, 177777, 177777, 177777, 177777
+	.WORD	177777, 177777, 177777, 177777, 177777, 177777, 177777, 177777
+	.WORD	177777, 177777, 177777, 177777, 177777, 177777, 177777, 177777
+	.WORD	177777, 177777, 177777, 177777, 177777, 177777, 177777, 177777
+CSP011:	.WORD	2., 16.
+	.WORD	177777, 177777, 156735, 156735, 177777, 177777, 73567, 73567
+	.WORD	177777, 177777, 156735, 156735, 177777, 177777, 73567, 73567
+	.WORD	177777, 177777, 156735, 156735, 177777, 177777, 73567, 73567
+	.WORD	177777, 177777, 156735, 156735, 177777, 177777, 73567, 73567
+CSP012:	.WORD	2., 16.
+	.WORD	167356, 135673, 72565, 72565, 177376, 137677, 53527, 73567
+	.WORD	175773, 167356, 73567, 56535, 177376, 167757, 53527, 172765
+	.WORD	167356, 135673, 56535, 52525, 177376, 137677, 73567, 56535
+	.WORD	167757, 177376, 72565, 153727, 137276, 135673, 73567, 53527
+CSP013:	.WORD	2., 16.
+	.WORD	125252, 125252, 52525, 52525, 125252, 125252, 52525, 52525
+	.WORD	125252, 125252, 52525, 52525, 125252, 125252, 52525, 52525
+	.WORD	125252, 125252, 52525, 52525, 125252, 125252, 52525, 52525
+	.WORD	125252, 125252, 52525, 52525, 125252, 125252, 52525, 52525
+CSP014:	.WORD	2., 16.
+	.WORD	121242, 121242, 52525, 52525, 105212, 105212, 52525, 52525
+	.WORD	124250, 124250, 52525, 52525, 105212, 105212, 52525, 52525
+	.WORD	121242, 121242, 52525, 52525, 105212, 105212, 52525, 52525
+	.WORD	124250, 124250, 52525, 52525, 105212, 105212, 52525, 52525
+CSP015:	.WORD	2., 16.
+	.WORD	21042, 21042, 50521, 50521, 105212, 105212, 50521, 50521
+	.WORD	4010, 4010, 42505, 42505, 105212, 105212, 50521, 50521
+	.WORD	21042, 21042, 50521, 50521, 105212, 105212, 50521, 50521
+	.WORD	4010, 4010, 42505, 42505, 105212, 105212, 50521, 50521
+CSP016:	.WORD	2., 16.
+	.WORD	0, 0, 50521, 50521, 5012, 5012, 40100, 40100
+	.WORD	4010, 4010, 2405, 2405, 100200, 100200, 10421, 10421
+	.WORD	0, 0, 50521, 50521, 5012, 5012, 40100, 40100
+	.WORD	4010, 4010, 2405, 2405, 100200, 100200, 10421, 10421
+CSP017:	.WORD	2., 16.
+	.WORD	0, 0, 40100, 40100, 4010, 4010, 0, 0
+	.WORD	0, 0, 2004, 2004, 100200, 100200, 0, 0
+	.WORD	0, 0, 40100, 40100, 4010, 4010, 0, 0
+	.WORD	0, 0, 2004, 2004, 100200, 100200, 0, 0 
+
+CSP030:	.WORD	2., 16.
+	.WORD	364, 57, 370, 37, 364, 57, 370, 37
+	.WORD	364, 57, 370, 37, 364, 57, 370, 37
+	.WORD	364, 57, 370, 37, 364, 57, 370, 37
+	.WORD	364, 57, 370, 37, 364, 57, 0, 0
+CSP031:	.WORD	2., 16.
+	.WORD	320, 13, 340, 7, 320, 13, 340, 7
+	.WORD	320, 13, 340, 7, 320, 13, 340, 7
+	.WORD	320, 13, 340, 7, 320, 13, 340, 7
+	.WORD	320, 13, 340, 7, 320, 13, 0, 0
+CSP032:	.WORD	2., 16.
+	.WORD	100, 2, 200, 1, 100, 2, 200, 1
+	.WORD	100, 2, 200, 1, 100, 2, 200, 1
+	.WORD	100, 2, 200, 1, 100, 2, 200, 1
+	.WORD	100, 2, 200, 1, 100, 2, 0, 0
+CSP033:	.WORD	2., 16.
+	.WORD	100000, 1, 0, 0, 100000, 1, 100000, 1
+	.WORD	100000, 1, 100000, 1, 100000, 1, 100000, 1
+	.WORD	100000, 1, 100000, 1, 100000, 1, 100000, 1
+	.WORD	100000, 1, 0, 0, 100000, 1, 0, 0
+CSP034:	.WORD	2., 16.
+	.WORD	140000, 3, 0, 0, 140000, 3, 140000, 2
+	.WORD	140000, 3, 140000, 3, 40000, 3, 140000, 2
+	.WORD	40000, 3, 140000, 3, 140000, 3, 140000, 2
+	.WORD	140000, 3, 0, 0, 140000, 3, 0, 0
+CSP035:	.WORD	2., 16.
+	.WORD	150000, 7, 0, 0, 164000, 17, 164000, 16
+	.WORD	64000, 15, 164000, 17, 64000, 17, 164000, 16
+	.WORD	64000, 17, 164000, 17, 64000, 15, 164000, 16
+	.WORD	164000, 17, 0, 0, 150000, 7, 0, 0
+CSP036:	.WORD	2., 16.
+	.WORD	154000, 37, 0, 0, 166000, 77, 126000, 52
+	.WORD	66000, 65, 126000, 77, 66000, 77, 126000, 72
+	.WORD	66000, 77, 126000, 77, 66000, 65, 126000, 52
+	.WORD	166000, 77, 0, 0, 154000, 17, 0, 0 
+	
+SPR001:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 0, 0, 300, 3
+	.BYTE	360, 17, 360, 17, 370, 37, 350, 37
+	.BYTE	330, 37, 350, 37, 320, 17, 260, 16
+	.BYTE	300, 3, 0, 0, 0, 0, 0, 0
+SPR002:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 0, 0, 0, 0
+	.BYTE	0, 0, 200, 0, 300, 1, 340, 3
+	.BYTE	300, 1, 200, 0, 0, 0, 0, 0
+	.BYTE	0, 0, 0, 0, 0, 0, 0, 0
+SPR003:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 200, 0, 200, 0
+	.BYTE	300, 1, 300, 1, 360, 7, 374, 37
+	.BYTE	360, 7, 300, 1, 300, 1, 200, 0
+	.BYTE	200, 0, 0, 0, 0, 0, 0, 0
+SPR004:	.BYTE	2., 16.
+	.BYTE	0, 0, 200, 0, 200, 0, 300, 1
+	.BYTE	320, 5, 340, 3, 370, 17, 376, 77
+	.BYTE	370, 17, 340, 3, 320, 5, 300, 1
+	.BYTE	200, 0, 200, 0, 0, 0, 0, 0
+SPR005:	.BYTE	2., 16.
+	.BYTE	0, 0, 200, 0, 204, 0, 310, 11
+	.BYTE	320, 5, 340, 3, 370, 17, 376, 177
+	.BYTE	370, 17, 340, 3, 320, 5, 310, 11
+	.BYTE	204, 0, 200, 0, 200, 0, 0, 0 
+SPR006:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 0, 0, 0, 0
+	.BYTE	360, 17, 360, 17, 360, 17, 360, 17
+	.BYTE	360, 17, 360, 17, 360, 17, 360, 17
+	.BYTE	0, 0, 0, 0, 0, 0, 0, 0 
+SPR010:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 340, 3, 370, 17
+	.BYTE	374, 37, 234, 34, 136, 75, 136, 75
+	.BYTE	234, 34, 354, 33, 34, 34, 30, 14
+	.BYTE	60, 6, 300, 1, 0, 0, 0, 0
+SPR011:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 300, 7, 360, 37
+	.BYTE	370, 77, 70, 71, 274, 172, 274, 172
+	.BYTE	70, 71, 370, 77, 70, 70, 360, 37
+	.BYTE	340, 17, 200, 3, 0, 0, 0, 0
+SPR012:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 300, 3, 360, 17
+	.BYTE	370, 33, 170, 65, 274, 64, 274, 20
+	.BYTE	170, 32, 260, 27, 160, 30, 340, 14
+	.BYTE	200, 7, 0, 0, 0, 0, 0, 0
+SPR013:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 300, 3, 360, 17
+	.BYTE	370, 33, 170, 65, 274, 64, 274, 20
+	.BYTE	170, 32, 360, 37, 360, 30, 340, 17
+	.BYTE	200, 7, 0, 0, 0, 0, 0, 0
+SPR014:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 300, 3, 360, 17
+	.BYTE	330, 37, 254, 36, 54, 75, 10, 75
+	.BYTE	130, 36, 350, 15, 30, 16, 60, 7
+	.BYTE	340, 1, 0, 0, 0, 0, 0, 0
+SPR015:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 300, 3, 360, 17
+	.BYTE	330, 37, 254, 36, 54, 75, 10, 75
+	.BYTE	130, 36, 370, 17, 30, 17, 360, 7
+	.BYTE	340, 1, 0, 0, 0, 0, 0, 0
+SPR020:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 0, 0, 300, 3
+	.BYTE	360, 17, 360, 17, 370, 37, 370, 37
+	.BYTE	370, 37, 370, 37, 360, 17, 360, 17
+	.BYTE	300, 3, 0, 0, 0, 0, 0, 0
+SPR021:	.BYTE	2., 16.
+	.BYTE	0, 0, 340, 7, 370, 37, 374, 77
+	.BYTE	374, 77, 376, 177, 376, 177, 376, 177
+	.BYTE	376, 177, 376, 177, 376, 177, 374, 77
+	.BYTE	374, 77, 370, 37, 340, 7, 0, 0
+SPR022:	.BYTE	2., 16.
+	.BYTE	340, 7, 370, 37, 374, 57, 372, 167
+	.BYTE	366, 173, 217, 377, 177, 367, 377, 357
+	.BYTE	377, 357, 377, 367, 377, 363, 376, 155
+	.BYTE	276, 157, 334, 77, 330, 37, 340, 7
+SPR023:	.BYTE	2., 16.
+	.BYTE	0, 0, 140, 5, 320, 12, 250, 67
+	.BYTE	364, 73, 216, 136, 166, 66, 172, 115
+	.BYTE	232, 52, 154, 165, 354, 162, 320, 55
+	.BYTE	254, 15, 324, 32, 320, 5, 0, 0
+SPR024:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 100, 1, 240, 22
+	.BYTE	120, 11, 210, 26, 124, 46, 50, 15
+	.BYTE	220, 52, 144, 25, 350, 42, 120, 5
+	.BYTE	250, 10, 120, 2, 0, 0, 0, 0
+SPR025:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 0, 0, 240, 2
+	.BYTE	120, 11, 210, 24, 120, 2, 50, 4
+	.BYTE	220, 12, 100, 25, 50, 2, 120, 5
+	.BYTE	240, 0, 0, 0, 0, 0, 0, 0
+SPR026:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 0, 0, 0, 0
+	.BYTE	100, 1, 0, 4, 120, 2, 0, 0
+	.BYTE	220, 10, 0, 5, 40, 0, 100, 1
+	.BYTE	0, 0, 0, 0, 0, 0, 0, 0
+SPR027:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 0, 0, 0, 0
+	.BYTE	0, 0, 0, 0, 0, 0, 0, 0
+	.BYTE	0, 0, 0, 0, 0, 0, 0, 0
+	.BYTE	0, 0, 0, 0, 0, 0, 0, 0
+SPR030:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 0, 0, 300, 3
+	.BYTE	360, 15, 370, 21, 370, 27, 370, 37
+	.BYTE	0, 0, 374, 77, 264, 55, 264, 55
+	.BYTE	264, 55, 374, 77, 0, 0, 0, 0
+SPR031:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 0, 0, 300, 3
+	.BYTE	360, 15, 370, 21, 370, 27, 370, 37
+	.BYTE	0, 0, 374, 77, 154, 73, 154, 73
+	.BYTE	154, 73, 374, 77, 0, 0, 0, 0
+SPR032:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 0, 0, 300, 3
+	.BYTE	360, 15, 370, 21, 370, 27, 370, 37
+	.BYTE	0, 0, 374, 77, 334, 66, 334, 66
+	.BYTE	334, 66, 374, 77, 0, 0, 0, 0 
+SPR033:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 140, 0, 140, 200, 23
+	.BYTE	200, 27, 330, 167, 274, 223, 374, 324
+	.BYTE	14, 365, 260, 355, 270, 5, 264, 10
+	.BYTE	4, 10, 40, 11, 100, 2, 0, 0
+SPR034:	.BYTE	2., 16.
+	.BYTE	0, 7, 210, 17, 334, 157, 334, 147
+	.BYTE	334, 27, 334, 27, 334, 167, 274, 223
+	.BYTE	374, 324, 10, 365, 260, 355, 270, 5
+	.BYTE	264, 10, 4, 10, 40, 11, 100, 2 
+SPR035:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 0, 0, 0, 0
+	.BYTE	100, 1, 40, 2, 120, 5, 0, 0
+	.BYTE	120, 5, 40, 2, 100, 1, 0, 0
+	.BYTE	0, 0, 0, 0, 0, 0, 0, 0
+SPR036:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 0, 0, 100, 1
+	.BYTE	140, 3, 60, 6, 130, 15, 0, 0
+	.BYTE	130, 15, 60, 6, 140, 3, 100, 1
+	.BYTE	0, 0, 0, 0, 0, 0, 0, 0
+SPR037:	.BYTE	2., 16.
+	.BYTE	0, 0, 100, 1, 40, 2, 120, 5
+	.BYTE	150, 13, 64, 26, 332, 55, 300, 1
+	.BYTE	332, 55, 64, 26, 150, 13, 120, 5
+	.BYTE	40, 2, 100, 1, 0, 0, 0, 0
+SPR038:	.BYTE	2., 16.
+	.BYTE	0, 0, 100, 1, 340, 3, 160, 7
+	.BYTE	170, 17, 274, 36, 336, 75, 344, 23
+	.BYTE	336, 75, 274, 36, 170, 17, 160, 7
+	.BYTE	340, 3, 100, 1, 0, 0, 0, 0 
+SPR040:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 340, 7, 370, 37
+	.BYTE	230, 37, 234, 77, 374, 77, 44, 77
+	.BYTE	44, 57, 374, 57, 374, 57, 370, 27
+	.BYTE	370, 31, 340, 7, 0, 0, 0, 0
+SPR041:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 340, 7, 370, 37
+	.BYTE	370, 34, 374, 74, 314, 77, 314, 77
+	.BYTE	74, 57, 74, 57, 374, 57, 370, 27
+	.BYTE	370, 31, 340, 7, 0, 0, 0, 0
+SPR042:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 340, 7, 370, 37
+	.BYTE	370, 37, 114, 76, 114, 76, 374, 77
+	.BYTE	234, 57, 234, 57, 374, 57, 370, 27
+	.BYTE	370, 31, 340, 7, 0, 0, 0, 0
+SPR043:	.BYTE	2., 16.
+	.BYTE	0, 0, 0, 0, 340, 7, 370, 37
+	.BYTE	230, 37, 234, 77, 174, 76, 174, 76
+	.BYTE	314, 57, 314, 57, 374, 57, 370, 27
+	.BYTE	370, 31, 340, 7, 0, 0, 0, 0 
+SPR044:	.BYTE	2., 5.
+	.BYTE	200, 35, 200, 40, 1, 200, 4, 1
+	.BYTE	270, 1
+SPR045:	.BYTE	2., 5.
+	.BYTE	330, 25, 10, 0, 0, 0, 0, 20
+	.BYTE	250, 33
+SPR046:	.BYTE	2., 5.
+	.BYTE	370, 5, 2, 0, 3, 300, 0, 100
+	.BYTE	100, 37
+SPR047:	.BYTE	2., 5.
+	.BYTE	50, 20, 6, 160, 1, 200, 16, 140
+	.BYTE	10, 24 
+SPR050:	.BYTE	2., 16.
+	.BYTE	0, 0, 340, 5, 360, 13, 360, 13
+	.BYTE	0, 0, 370, 36, 370, 36, 370, 35
+	.BYTE	370, 35, 370, 36, 370, 36, 0, 0
+	.BYTE	360, 13, 360, 13, 340, 5, 0, 0
+SPR051:	.BYTE	2., 16.
+	.BYTE	0, 0, 340, 5, 360, 13, 360, 13
+	.BYTE	0, 0, 370, 27, 370, 27, 370, 17
+	.BYTE	370, 17, 370, 27, 370, 27, 0, 0
+	.BYTE	360, 13, 360, 13, 340, 5, 0, 0
+SPR052:	.BYTE	2., 16.
+	.BYTE	0, 0, 340, 5, 360, 13, 360, 13
+	.BYTE	0, 0, 360, 37, 360, 37, 350, 37
+	.BYTE	350, 37, 360, 37, 360, 37, 0, 0
+	.BYTE	360, 13, 360, 13, 340, 5, 0, 0
+SPR053:	.BYTE	2., 16.
+	.BYTE	0, 0, 340, 5, 360, 13, 360, 13
+	.BYTE	0, 0, 330, 37, 330, 37, 270, 37
+	.BYTE	270, 37, 330, 37, 330, 37, 0, 0
+	.BYTE	360, 13, 360, 13, 340, 5, 0, 0 
+
+STR001:	.ASCIZ	<302>/SPACE/<303>/ - START/
+STR002:	.ASCIZ	<302>/1/<303>/ - COLORS:/
+STR003:	.ASCIZ	<302>/2/<303>/ - BALL:/
+STR004:	.ASCIZ	<302>/ 3/<303>/ - CHEATS: /
+STR005:	.ASCIZ	<302>/ 4/<303>/ - DEBUG:  /
+STR010: .ASCIZ	<301>/OFF/
+STR011:	.ASCIZ	<301>/ON /
+STR012:	.ASCIZ	<302>/LEVEL/
+STR013:	.ASCIZ	<302>/SCORE/
+STR014:	.ASCIZ	<301>/RGB/
+STR015:	.ASCIZ	<301>/GRB/
+STR016:	.ASCIZ	<301>/SLOW/
+STR017:	.ASCIZ	<301>/NORM/
+
+STR020:	.ASCIZ	/CONTROLS: /
+STR021:	.ASCIZ	<302>/UP/<303>/, /<302>/DOWN/<303>/, /<301>/8/<303>/, /<301>/2/
+STR022:	.ASCIZ	<302>/SPACE/<303>/ - FIRE/
+STR023:	.ASCIZ	<302>/STOP/<303>/ - MENU/
+STR024:	.ASCIZ	<302>/UST/<303>/ - PAUSE/
+STR025:	.asciz	<302>/MOUSE ON PPU /<303>/177400/
+STR030:	.ASCII	/    KRAKOUT FOR ELEKTRONIKA MS 0511 (UKNC).   /
+	.ASCII	/ORIGINAL SINCLAIR ZX SPECTRUM GAME: (C) GREMLIN GRAPHICS 1987.   /
+	.ASCII	/UKNC VERSION BY BLAIRE CAS.   /
+	.ASCII	/MEGA THANKS TO N.ZEEMIN FOR UKNC EMULATOR (UKNCBTL) /
+	.ASCII	/AND TO ALL FROM WWW.ZX-PK.RU   /
+	.ASCII	/                                     /
+	.ASCII	/                                     /
+	.BYTE	0
+STR031:	.ASCII	/TRY __^^_^ IN MENU :)                /
+	.ASCII	/                                     /
+	.BYTE	0
+STR040:	.ASCII	/GET READY!/<0>
+STR041:	.ASCII	<302>/GET READY!/<0>
+STR090:	.ASCII	/GAME OVER/<0>
+	.EVEN
+
+	
+END:
+	
+; // ADDRESSes /////////////////////////////////////////////////////////////////
+
+; CPU-PPU exchange
+CMDBUF=150000	; ~4kb commands buffer
+PPUYYY=157776	; PPU state
+VSY1CN=157774	; vsync 1 counter
+VSY2CN=157772	; vsync 2 counter
+KEYCUR=157770	; current key
+KEYUP =157766
+KEYDWN=157764
+KEYLFT=157762
+KEYRHT=157760
+KEYSPC=157756
+KEYENT=157754
+KEY1  =157752
+KEY2  =157750
+KEYHLT=157746
+KEYSTP=157744
+KEYK1 =157742
+KEY3  =157740
+RTICN2=157736
+KEYCOM=157734
+KEY4  =157732
+CMOUSY=157730
+CNOMOU=157726
+
+	.END	START

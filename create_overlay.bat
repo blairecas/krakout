@@ -1,0 +1,1 @@
+..\..\php5\php.exe -c ..\..\php5\ -f gen_overlay.php
