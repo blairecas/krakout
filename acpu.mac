@@ -248,7 +248,6 @@ MainLevel:
 	; sound & print
 	call	ProcessSound			; (maybe) sound effect	
 	call	PrintScore			; (maybe) draw score
-	call	PrintLevel			; (maybe) draw level and lives
 	; logic
 	call	TestLevelEnd			; test for level end
 	call	LostDo				; lost state processing
@@ -764,11 +763,16 @@ DrawBackground:
 	mov	#STR012, R0	; print 'level'
 	mov	#C_FIELD_Y-16.*C_SCRWID+15.+C_VADDR2, R5
 	call	PrintStr
+	mov	Level, R0
+	mov	#C_FIELD_Y-16.*C_SCRWID+21.+C_VADDR2, R5
+	call	PrintDecimal2
 	mov	#47., R0	; 47. - small bat tile
 	mov	#C_FIELD_Y-18.*C_SCRWID+25.+C_VADDR2, R5
 	call	DrawTile
+	mov	Lives, R0
+	mov	#C_FIELD_Y-16.*C_SCRWID+27.+C_VADDR2, R5
+	call	PrintDecimal2
 	incb	ScoreChanged			; need draw score
-	incb	LivesChanged			; need draw lives
 	call	DuplicateScreen
 	return
 
@@ -858,7 +862,6 @@ MusicDelay:	.word	0
 
 ; R0 - song #, R1 - repeat
 MusicInit:
-	beq	99$
 	tst	PpuComm
 	bne	.-4
 	mov	R0, PpuCommR0
@@ -1327,20 +1330,6 @@ PrintScore:
 	mov	Score, R0
 	mov	#16.*C_SCRWID+7.+C_VADDR1, R5
 	call	PrintDecimal5
-99$:	return
-
-
-; draw lvl & lives
-PrintLevel:
-	tstb	LivesChanged
-	beq	99$
-	clrb	LivesChanged
-	mov	Level, R0
-	mov	#16.*C_SCRWID+21.+C_VADDR1, R5
-	call	PrintDecimal2
-	mov	Lives, R0
-	mov	#16.*C_SCRWID+27.+C_VADDR1, R5
-	call	PrintDecimal2
 99$:	return
 
 
@@ -3169,9 +3158,9 @@ YouWin:		.byte	0
 RightWall:	.byte	0			; right wall presence
 LostCounter:	.byte	0			; are we dying? (counter 1..150 or so)
 ScoreChanged:	.byte	0			; 1 - need redraw score
-LivesChanged:	.byte	0			; 1 - need redraw lives
 BallSuper:	.byte	0
 BallSuperCnt:	.byte	0
+		.even
 
 TempX:		.word	0
 TempY:		.word	0
