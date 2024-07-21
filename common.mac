@@ -81,18 +81,15 @@ C_MENUY		= 60.
 C_SCROLL_Y	= 230.
 
 
-; Keys 'down' scancodes
-C_KEY_SPACE	= ^B01001011
-C_KEY_1		= ^B00011000
-C_KEY_2		= ^B00011001
-C_KEY_3		= ^B00011010
-C_KEY_UP	= ^B01101100
-C_KEY_DOWN	= ^B01011100
-
-
 ; //////////////////////////////////////////////////////////////////////////////	
 ; // CPU <-> PPU comm addrs 
 ; //////////////////////////////////////////////////////////////////////////////
+
+; Mouse
+NoMouse		= 157650		; do we have a mouse hardware
+MouseBtn	= 157652		; Mouse button
+MouseY		= 157654		; Mouse Y coord
+MouseX		= 157656		; Mouse X coord
 
 ; Keyboard
 Key8		= 157670		; Key 8

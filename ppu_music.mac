@@ -1,10 +1,5 @@
 MusicEnabled:	.word	1
 
-StopDetect:
-	inc	R0
-	rti
-
-
 ; PPT3 play for UKNC Abberant's module (AY regs: 177360, 177362, 177364)
 
 ; Based on:

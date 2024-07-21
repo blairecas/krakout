@@ -65,25 +65,32 @@ MainReset:
 	call	ClearScreen
 	; draw 'krakout' tiles
 	mov	#50., R2
-	mov	#22.*C_SCRWID+8.+C_VADDR2, R4
+	mov	#20.*C_SCRWID+8.+C_VADDR2, R4
 	mov	#7., R3
 	call	100$
 	mov	#60., R2
-	mov	#38.*C_SCRWID+8.+C_VADDR2, R4
+	mov	#36.*C_SCRWID+8.+C_VADDR2, R4
 	mov	#7., R3
 	call	100$
 	; print menu lines
-	; 1 - palette
+	; 1 - mouse
+	mov	#StrNoMouse, R0
+	tst	NoMouse
+	bne	10$
+	mov	#StrUseMouse, R0
+10$:	mov	#C_MENUY+10.*C_SCRWID+9.+C_VADDR2, R5
+	call	PrintStr
+	; 2 - palette
 	mov	#Str002, R0
-	mov	#C_MENUY+15.*C_SCRWID+9.+C_VADDR2, R5
+	mov	#C_MENUY+30.*C_SCRWID+9.+C_VADDR2, R5
 	call	PrintStr
-	; 2 - sound
+	; 3 - sound
 	mov	#Str003, R0
-	mov	#C_MENUY+40.*C_SCRWID+9.+C_VADDR2, R5
+	mov	#C_MENUY+50.*C_SCRWID+9.+C_VADDR2, R5
 	call	PrintStr
-	; 3 - cheat
+	; 4 - cheat
 	mov	#Str004, R0
-	mov	#C_MENUY+65.*C_SCRWID+9.+C_VADDR2, R5
+	mov	#C_MENUY+70.*C_SCRWID+9.+C_VADDR2, R5
 	call	PrintStr
 	; press space
 	mov	#Str000, R0
@@ -91,9 +98,10 @@ MainReset:
 	call	PrintStr
 	; next mode
 	call	DuplicateScreen
+	call	PrintMenuMouse
 	call	PrintMenuPalette
-	call	PrintMenuCheat
 	call	PrintMenuSound
+	call	PrintMenuCheat
 	clr	R0				; song # = 0
 	mov	#1, R1				; no repeat
 	call	MusicInit
@@ -124,15 +132,21 @@ MainMenu:
 	call	MenuBallProc
 	call	MusicPlay
 	; start game
-	cmp	KeyCurrent, #C_KEY_SPACE
-	bne	10$
+	tst	KeySpace
+	beq	10$
+	clr	KeySpace
 	call	MusicMute
-	clr	KeyCurrent
 	inc	CurrentMode
 	return
-10$:	cmp	KeyCurrent, #C_KEY_1
-	bne	20$
-	clr	KeyCurrent
+10$:	tst	Key1
+	beq	20$
+	clr	Key1
+	call	MenuSound
+	com	UseMouse
+	jmp	PrintMenuMouse
+20$:	tst	Key2
+	beq	30$
+	clr	Key2
 	call	MenuSound
 	mov	Palette, R0	
 	inc	R0
@@ -140,19 +154,19 @@ MainMenu:
 	mov	R0, Palette
 	call	SetPalette
 	jmp	PrintMenuPalette
-20$:	cmp	KeyCurrent, #C_KEY_2
-	bne	30$
-	clr	KeyCurrent
+30$:	tst	Key3
+	beq	40$
+	clr	Key3
 	call	MenuSound	
 	com	UseSound
 	jmp	PrintMenuSound
-30$:	cmp	KeyCurrent, #C_KEY_3
-	bne	40$
-	clr	KeyCurrent
+40$:	tst	Key4
+	beq	50$
+	clr	Key4
 	call	MenuSound	
 	com	UseCheat
 	jmp	PrintMenuCheat
-40$:	return
+50$:	return
 
 
 ; 02 - global prepare play
@@ -205,19 +219,19 @@ MainLevel:
 ;	mov	#C_SCRWID*4.+1.+C_VADDR, R1
 ;	call	PrintOctalWord
 1$:	; DEBUG: key 1
-	cmp	KeyCurrent, #C_KEY_1
-	bne	2$
-	clr	KeyCurrent
+	tst	Key1
+	beq	2$
+	clr	Key1
 	mov	#C_MODE_LEVEND, CurrentMode
 2$:	; key 2 - game over
-	cmp	KeyCurrent, #C_KEY_2
-	bne	3$
-	clr	KeyCurrent
+	tst	Key2
+	beq	3$
+	clr	Key2
 	mov	#C_MODE_OVER, CurrentMode
 3$:	; key 3 - max level
-	cmp	KeyCurrent, #C_KEY_3
-	bne	4$
-	clr	KeyCurrent
+	tst	Key3
+	beq	4$
+	clr	Key3
 	mov	#C_LEVEL_MAX-1, Level
 	mov	#C_MODE_LEVEND, CurrentMode
 4$:	; end debug info
@@ -768,21 +782,27 @@ PrintOnOff:
 20$:	jmp	PrintStr
 
 
+PrintMenuMouse:
+	mov	UseMouse, R0
+	mov	#C_MENUY+10.*C_SCRWID+18.+C_VADDR1, R5
+	br	PrintOnOff
+
+
 PrintMenuPalette:
 	mov	Palette, R0
-	mov	#C_MENUY+15.*C_SCRWID+20.+C_VADDR1, R5
+	mov	#C_MENUY+30.*C_SCRWID+20.+C_VADDR1, R5
 	jmp	PrintDecimal2	
 
 
 PrintMenuSound:
 	mov	UseSound, R0
-	mov	#C_MENUY+40.*C_SCRWID+18.+C_VADDR1, R5
+	mov	#C_MENUY+50.*C_SCRWID+18.+C_VADDR1, R5
 	br	PrintOnOff
 
 
 PrintMenuCheat:
 	mov	UseCheat, R0
-	mov	#C_MENUY+65.*C_SCRWID+18.+C_VADDR1, R5
+	mov	#C_MENUY+70.*C_SCRWID+18.+C_VADDR1, R5
 	br	PrintOnOff
 
 
@@ -838,6 +858,7 @@ MusicDelay:	.word	0
 
 ; R0 - song #, R1 - repeat
 MusicInit:
+	beq	99$
 	tst	PpuComm
 	bne	.-4
 	mov	R0, PpuCommR0
@@ -1743,9 +1764,9 @@ BATDO1:	bit	#1., FrameCount		; every 2 frames
 
 
 ; glued from beginning
-BATDO2:	cmp	KeyCurrent, #C_KEY_SPACE	; awaiting press fire
-	bne	10$
-	clr	KeyCurrent
+BATDO2:	tst	KeySpace			; awaiting press fire
+	beq	10$
+	clr	KeySpace
 	br	20$
 10$:	inc	BATSUB
 	cmp	BATSUB, #512.
@@ -1783,9 +1804,9 @@ BATDO5:	call BATDO3
 
 
 ; glued
-BATDO6:	cmp	KeyCurrent, #C_KEY_SPACE
-	bne	10$
-	clr	KeyCurrent
+BATDO6:	tst	KeySpace
+	beq	10$
+	clr	KeySpace
 	mov	#5., BatMode	; prepare to glued
 	clr	BATSUB
 	mov	#1., SoundNum
@@ -1821,13 +1842,13 @@ BatKeys:
 	add	KeyDown, R0
 	beq	BatVelInit			; nothing pressed - reinit velocities
 50$:	; up
-	cmp	KeyCurrent, #C_KEY_UP
-	bne	60$
+	tst	KeyUp
+	beq	60$
 	sub	BatVel, BatY
 	br	BatVelInc
 60$:	; down
-	cmp	KeyCurrent, #C_KEY_DOWN
-	bne	70$
+	tst	KeyDown
+	beq	70$
 	add	BatVel, BatY
 	br	BatVelInc
 70$:	return
@@ -3134,6 +3155,7 @@ Pause:		.word	0
 CurrentMode:	.word	0
 FrameCount:	.word	0
 Palette:	.word	0			; default must be GRB
+UseMouse:	.word	0
 
 Level:		.word	0
 Lives:		.word	20
@@ -3626,18 +3648,21 @@ TBAlph:		.byte	64.,0., 63.,3., 63.,6., 63.,9., 62.,12., 62.,15., 61.,18., 60.,21
 		.byte	54.,-32., 56.,-30., 57.,-27., 59.,-24., 60.,-21., 61.,-18., 62.,-15., 62.,-12., 63.,-9.
 		.byte	63.,-6., 63.,-3.
 
+StrUseMouse:	.asciz	"1"<2>":;"<6>"MOUSE"
+StrNoMouse:	.asciz	<2>"0:;NO MOUSE"
 Str000:		.asciz	<4>"PRESS "<7>"SPACE"
-Str002:		.asciz	"1"<2>":;"<6>"PALETTE"
-Str003:		.asciz	"2"<2>":;"<6>"SOUND"
-Str004:		.asciz	"3"<2>":;"<6>"CHEAT"
-Str010:		.asciz	"OFF"
-Str011:		.asciz	"ON "
+Str002:		.asciz	"2"<2>":;"<6>"PALETTE"
+Str003:		.asciz	"3"<2>":;"<6>"SOUND"
+Str004:		.asciz	"4"<2>":;"<6>"CHEAT"
+Str010:		.asciz	<2>"OFF"
+Str011:		.asciz	<4>"ON "
 Str013:		.asciz	<6>"SCORE"
 Str012:		.asciz	<6>"LEVEL"
 StrOver:	.asciz	"GAME OVER"
 StrWin:		.asciz	"YOU WIN"
-StrScroll:	.ascii	"KRAKOUT FOR MS^0511 <UKNC> BY BLAIRE CAS ] REDDIE=  ORIGINAL\ SINCLAIR ZX SPECTRUM GAME:;<C> GREMLIN GRAPHICS 1987=  "
-		.ascii	"THANKS\ N=ZEEMIN[ TITUS <EMULATORS>[ KUVO <PT3 PLAYER>=== AND ALL FROM MS^0511 COMMUNITY=  "
+StrScroll:	.ascii	"KRAKOUT FOR MS^0511 <UKNC> BY BLAIRE CAS ] REDDIE=   ORIGINAL\ SINCLAIR ZX SPECTRUM GAME:;<C> GREMLIN GRAPHICS 1987=   "
+		.ascii	"THANKS\ N=ZEEMIN[ TITUS <EMULATORS>[ KUVO <PT3 PLAYER>=== AND ALL FROM MS^0511 COMMUNITY=   "
+		.ascii	"KEYS ARE\ UP[ DOWN[ SPACE[ UST[ STOP="
 		.asciz	"                             "
 		.even
 

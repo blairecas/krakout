@@ -24,6 +24,9 @@ PPMain:	; clean upper PPU RAM (with screen plane 0)
 	mov	#KeyboardInt,  @#300
 	bis	#100, @#177700			; allow keyboard interrupts
 
+	; check for mouse
+	call	MouseTest
+
         ; set 'PPU is ready'
 	mov	#PpuComm/2, @#177010
 	clr	@#177014
@@ -36,8 +39,10 @@ PPMain:	; clean upper PPU RAM (with screen plane 0)
 ; // MAIN PPU CYCLE
 ; //////////////////////////////////////////////////////////////////////////////
 
+
 MainCycle:
 	call	CmdProcess
+	call	MouseProc
 	br	MainCycle
 
 
@@ -117,6 +122,12 @@ TimerInit:
 	tst	@#177710
 	bne	TimerInit
 	return
+
+
+; helper for detect @#4 interrupt
+StopDetect:
+	inc	R0
+	rti
 
 
 ; get CPU RAM byte -> R0 and advance addr
@@ -307,6 +318,68 @@ PrintStr:
 99$:	return 
 
 
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Mouse
+; //////////////////////////////////////////////////////////////////////////////
+
+PpuNoMouse:	.word	0
+PpuMouseX:	.word	0
+PpuMouseY:	.word	0
+PpuMouseBtn:	.word	0
+
+; test for mouse presents
+MouseTest:
+	mov	@#4, -(SP)
+	mov	#StopDetect, @#4
+	clr	R0
+	tst	@#177400
+	mov	(SP)+, @#4
+	mov	R0, PpuNoMouse
+	mov	#NoMouse/2, @#177010
+	mov	R0, @#177014
+	return
+
+
+; mouse processing
+MouseProc:
+	tst	PpuNoMouse
+	bne	99$
+	mov	@#177400, R0
+	; [YYYYYYYLXXXXXXXR] signed 7-bit
+	mov	PpuMouseBtn, R3			; R3 - old left button
+	clr	R2				; R2 - left button
+	; X and RMB
+	; movb	R0, R1
+	; asr	R1
+	; rol	R2
+	; add	R1, MOUX
+	; Y and LMB
+	swab	R0
+	movb	R0, R1
+	asr	R1
+	rol	R2
+	sub	R1, PpuMouseY			; Y is inverted
+	mov	R2, PpuMouseBtn
+	; check Y for out of screen
+	cmp	PpuMouseY, #18.
+	bge	26$
+	mov	#18., PpuMouseY
+	br	28$
+26$:	cmp	PpuMouseY, #173.-8.
+	ble	28$
+	mov	#173.-8., PpuMouseY
+28$:	; write coords to CPU
+;	mov	#MouseY/2, @#177010
+;	mov	PpuMouseY, @#177014
+	; click write only if it happens
+	cmp	R2, R3
+	beq	99$
+	mov	#KeySpace/2, @#177010
+	mov	PpuMouseBtn, @#177014
+99$:	return
+
+
 ; //////////////////////////////////////////////////////////////////////////////
 ; // PPU procedures 
 ; //////////////////////////////////////////////////////////////////////////////
@@ -320,7 +393,7 @@ PalUpdate:
 
 
 ; update empty wait cycles to CPU (debug purposes)
-PpuWaiting:	.word	0		; PPU wait cycles counter
+PpuWaiting:	.word	0			; PPU wait cycles counter
 UpdWaitCycles:
 	mov	#<PpuWaitCount/2>, @#177010
 	mov	PpuWaiting, @#177014
@@ -343,14 +416,14 @@ ClearScreen2:
 ; R0 - s-addr
 CopyKubBuf2:
 	mov	R0, R1
-	bic	#^B1111111100001111, R1			; Y * 16
+	bic	#^B1111111100001111, R1		; Y * 16
 	mul	#C_SCRWID, R1
 	bic	#^B1111111111110000, R0
 	asl	R0
 	add	R0, R1
 	mov	R1, R2
-	add	#C_VADDR2, R1				; source vaddr
-	add	#C_VADDR1, R2				; dest vaddr
+	add	#C_VADDR2, R1			; source vaddr
+	add	#C_VADDR1, R2			; dest vaddr
 	mov	#16., R3
 	mov	#177010, R4
 	mov	#177012, R5
@@ -753,7 +826,7 @@ Snd006:	.word	150, 140, 130, 120, 110, 100, 0
 ; //////////////////////////////////////////////////////////////////////////////
 
 QueueCurrent:	.word	QueueTable
-QueueTable:	.blkw	5*20.				; max 20. queued commands
+QueueTable:	.blkw	5*20.			; max 20. queued commands
 QueueTableEnd:	.word	0
 
 @include ppu_font.mac
