@@ -1,7 +1,9 @@
 *.lst
+*.log
 *.obj
+*.dat
+*.zip
+*.bin
+_*.*
 system.dsk
 rt11.exe
-krk.sav
-krkbin.dat
-

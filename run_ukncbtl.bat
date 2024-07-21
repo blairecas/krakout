@@ -1,0 +1,1 @@
+start ..\..\ukncbtl\ukncbtl /autostart /disk0:C:\Projects\uknc\00_code\krakout\main.dsk /boot1

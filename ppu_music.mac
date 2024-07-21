@@ -1,0 +1,1136 @@
+MusicEnabled:	.word	1
+
+StopDetect:
+	inc	R0
+	rti
+
+
+; PPT3 play for UKNC Abberant's module (AY regs: 177360, 177362, 177364)
+
+; Based on:
+; CSI MultiPlayer 3 for CSIDOS by KUVO
+; https://csi.pdp-11.ru/
+
+	AY_1_PORT_UKNC = 177360
+	AY_2_PORT_UKNC = 177362
+
+	AY_TONA = 0
+	AY_TONB = 2
+	AY_TONC = 4
+	AY_NOISE = 6
+	AY_MIXER = 7
+	AY_AMPLITUDEA = 8.
+	AY_AMPLITUDEB = 9.
+	AY_AMPLITUDEC = 10.
+	AY_ENVELOPE = 11.
+	AY_ENVELOPETYPE = 13.
+
+	CHP_POSITION_IN_ORNAMENT = 0 
+	CHP_POSITION_IN_SAMPLE = 1 
+	CHP_CURRENT_AMPLITUDE_SLIDING= 2 
+	CHP_CURRENT_NOISE_SLIDING = 3 
+	CHP_CURRENT_ENVELOPE_SLIDING = 4 
+	CHP_CURRENT_TON_SLIDING = 6 
+	CHP_TON_ACCUMULATOR = 8. 
+	CHP_TON_SLIDE_COUNT = 10.   
+	CHP_CURRENT_ONOFF = 11.   
+	CHP_ONOFF_DELAY = 12.   
+	CHP_OFFON_DELAY = 13.   
+	CHP_ENVELOPE_ENABLED = 14.   
+	CHP_SIMPLEGLISS = 15.   
+	CHP_ENABLED = 16.   
+	CHP_ADDRESS_IN_PATTERN = 18.   
+	CHP_ORNAMENTPOINTER = 20.   
+	CHP_SAMPLEPOINTER = 22.   
+	CHP_SLIDE_TO_NOTE = 24.   
+	CHP_NOTE = 26.   
+	CHP_TON_SLIDE_STEP = 28.   
+	CHP_TON_DELTA = 30.   
+	CHP_NUMBER_OF_NOTES_TO_SKIP = 32.   
+	CHP_TON_SLIDE_DELAY = 33.   
+	CHP_NOTE_SKIP_COUNTER = 34.   
+	CHP_VOLUME = 35.   
+	CHP_TONE_REG = 36.   
+	CHP_AMPL_REG = 37.   
+	CHP = 38.
+
+	PARAM_VERSION = 		0
+	PARAM_DELAY =	 		1
+	PARAM_ENV_DELAY =	 	2
+
+	PARAM_MODULE_ADDRESS =	 	4
+	PARAM_SAMPLESPOINTERS = 	6
+	PARAM_ORNAMENTSPOINTERS =	10
+	PARAM_PATTERNSPOINTER = 	12
+	PARAM_LOOPPOSITION = 		14
+	PARAM_CURRENTPOSITION = 	16
+
+	PARAM_VAR0START =	 	20
+
+	PARAM_PRNOTE =			20 ; PARAM_VAR0START
+	PARAM_PRSLIDING =	 	22
+	PARAM_ADDTOENVELOPE =	 	24
+	PARAM_ENV_SLIDE_ADD =		26
+	PARAM_CUR_ENV_SLIDE =		30
+	PARAM_ADDTONOISE =		32
+	PARAM_DELAYCOUNTER =		34
+	PARAM_CUR_ENV_DELAY =		35
+	PARAM_NOISE_BASE =		36
+
+	PARAM_CHANNEL_A =	 	40
+	PARAM_CHANNEL_B =	 	PARAM_CHANNEL_A + CHP
+	PARAM_CHANNEL_C = 		PARAM_CHANNEL_B + CHP
+
+	PARAM_AYREGS =			PARAM_CHANNEL_C + CHP
+
+	PARAM_VOL_TAB = 		PARAM_AYREGS
+	PARAM_ENVELOPE_BASE =	 	PARAM_AYREGS + 14.
+	PARAM_NOTE_TAB =		PARAM_VOL_TAB + 256.
+
+	PARAM_SIZE =			96.*2 + PARAM_NOTE_TAB
+		
+	PARAM_TAB_WORK = PARAM_VOL_TAB + 16. 
+	PARAM_TAB_WORK_OLD_1 = PARAM_TAB_WORK
+	PARAM_TAB_WORK_OLD_2 = PARAM_TAB_WORK_OLD_1 + 24.
+	PARAM_TAB_WORK_OLD_3 = PARAM_TAB_WORK_OLD_2 + 24.
+	PARAM_TAB_WORK_OLD_0 = PARAM_TAB_WORK_OLD_3 + 2.
+	PARAM_TAB_WORK_NEW_0 = PARAM_TAB_WORK_OLD_0
+	PARAM_TAB_WORK_NEW_1 = PARAM_TAB_WORK_OLD_1
+	PARAM_TAB_WORK_NEW_2 = PARAM_TAB_WORK_NEW_0 + 24.
+	PARAM_TAB_WORK_NEW_3 = PARAM_TAB_WORK_OLD_3
+
+	PARAM_VAR0END =			PARAM_TAB_WORK
+
+INTEGRATION_POINTS:
+	FRAME_NUMBER:		.word 0 				;+6  Incremented by one each time the PLAY entry point is accessed
+	TS_PRESENT:		.word 0 				;+10 TS sign
+	SEL_DEVICE:		.word 0 				;+12 Auto selected device: 0 - legacy AY/YM or TurboSound or GryphonSound, 1 - UKNC
+	PARAMETERS_AY1_ADDR:	.word PARAMETERS_AY1 			;+14 Address of the operating parameters of AY1
+	PARAMETERS_AY2_ADDR:	.word PARAMETERS_AY2 			;+16 Address of the operating parameters of AY2
+	AYREGS_AY1:		.word PARAMETERS_AY1 + PARAM_AYREGS	;+20 Address of last sent AY1 register values
+	AYREGS_AY2:		.word PARAMETERS_AY2 + PARAM_AYREGS	;+22 Address of last sent AY2 register values
+	PT3FILE_MODULE1_ADDR:	.word M_Menu				;+24 PT3 file address
+	PT3FILE_MODULE2_ADDR:	.word 0 				;+26 Address of module 2 (TS) in PT3 file
+	PT3FILE_END_ADDR:	.word M_MenuEnd				;+30 Address of end PT3 file
+	END_OF_PT3FILE:		.word 0 				;+32 CODA. End of PT3 file reached (incremented by one each time)
+	NO_REPEAT_MODE:		.word 1 				;+34 Play without repeat. Set (not zero) before INIT call.
+	REPETITION_NUMBER: 	.word 0 				;+36 Number of elapsed repetitions after end of PT3 file
+	CUR_PARAMS_ADDR:	.word 0
+
+
+TS_ID:	.ascii	"PT3!PT3!02TS"
+TS_ID_END:
+TS_ID_CHECK:
+	mov	#4, R4
+10$:	cmpb	-(R0), -(R2)
+	bne	11$
+	sob	R4, 10$
+11$:	return
+
+; Initialization of pt3 module 
+; R0 = song #
+; R1 = 0 - repeat, 1 - no repeat
+Pt3Init:
+	tst	MusicEnabled
+	beq	99$
+	
+	asl	R0
+	asl	R0
+	mov	MusicTable(R0), PT3FILE_MODULE1_ADDR
+	mov	MusicTable+2(R0), PT3FILE_END_ADDR
+	mov	R1, NO_REPEAT_MODE
+
+; UKNC AY device detect start
+	mov	@#4, -(SP)
+	mov	#StopDetect, @#4
+	clr	R0
+	mov	R0, @#AY_1_PORT_UKNC
+	mov	(SP)+, @#4
+	tst	R0
+	beq	10$
+	; no AY device
+	clr	MusicEnabled
+99$:	return
+10$:
+; UKNC AY device detect ends here
+
+	clr	TS_PRESENT
+	clr	SEL_DEVICE
+	clr	FRAME_NUMBER
+	clr	END_OF_PT3FILE
+	clr	PT3FILE_MODULE2_ADDR
+	clr	REPETITION_NUMBER
+
+	mov	#PARAM_DEVICES_AY1, R3	
+	clr	(R3)+				; legacy #1 (not needed in UKNC version, but let it be)
+	mov	#100000, (R3)+			; gsound #1
+	mov	#AY_1_PORT_UKNC, (R3)+		; UKNC AY #1
+	mov	PT3FILE_MODULE1_ADDR, R1
+
+TS_DETECT:
+	mov	PT3FILE_END_ADDR, R0
+	mov	#TS_ID_END, R2
+	call	TS_ID_CHECK
+	bne	INIT_NEXT
+	sub	#2, R0				; SKIP LENGTH OF SECOND MODULE
+	call	TS_ID_CHECK
+	bne	INIT_NEXT
+	clr	R5				; GET OFFSET TO SECOND MODULE
+	bisb	-(R0), R5
+	swab	R5
+	bisb	-(R0), R5
+	add	PT3FILE_MODULE1_ADDR, R5 	; GET ADDRESS OF SECOND MODULE
+	call	TS_ID_CHECK
+	bne	INIT_NEXT
+
+	; have TS
+	inc	TS_PRESENT
+
+	mov	R5, -(SP)
+	call	INIT_NEXT
+	mov	(SP)+, R1
+
+	mov	R1, PT3FILE_MODULE2_ADDR
+	mov	#PARAM_DEVICES_AY2, R3
+	mov	#1, (R3)+			; legacy #2
+	mov	#40000, (R3)+			; gsound #2
+	mov	#AY_2_PORT_UKNC, (R3)+		; UKNC AY #2
+
+INIT_NEXT:
+	mov	R3, CUR_PARAMS_ADDR
+	mov	R1, PARAM_MODULE_ADDRESS(R3)
+	mov	R1, R5  
+	movb	100.(R5), PARAM_DELAY(R3)
+	add	#200., R1   
+	mov	R1, PARAM_CURRENTPOSITION(R3)
+	movb	102.(R5), R2 
+	add	R2, R1
+	inc	R1
+	mov	R1, PARAM_LOOPPOSITION(R3)
+	clr	R1
+	bisb	104.(R5), R1 
+	swab	R1
+	bisb	103.(R5), R1 
+	add	R5, R1  
+	mov	R1, PARAM_PATTERNSPOINTER(R3) 
+	mov	#169., R1
+	add	R5, R1  
+	mov	R1, PARAM_ORNAMENTSPOINTERS(R3)  
+	mov	#105., R1
+	add	R5, R1  
+	mov	R1, PARAM_SAMPLESPOINTERS(R3)
+
+ 	mov	R5, -(SP)
+ 
+ 	mov	#TABLES_PACK, R4 
+	mov	#PARAM_TAB_WORK + 98., R5
+	add	R3, R5
+
+	mov	#4, R3
+	mov	#12., R2
+10$: 	mov	(R4)+, R0   
+	asl	R0  
+	br	12$  
+11$: 	clr	R1
+	bisb	(R4)+, R1   
+	add	R1, R0  
+	add	R1, R0
+12$: 	mov	R0, -(R5)   
+	sob	R2, 11$
+	movb	(R4)+, R2   
+	inc	R4
+	bic	#1, R4  
+	sob	R3, 10$
+
+	mov	CUR_PARAMS_ADDR, R5
+
+ 	mov	#PARAM_VAR0START, R1
+ 	add	R5, R1
+	mov	#PARAM_VAR0END-PARAM_VAR0START, R3
+13$: 	clrb	(R1)+
+	sob	R3, 13$
+
+	movb	#1, PARAM_DELAYCOUNTER(R5)
+	mov	#170001, R0 			; 0xF001
+	mov	#EMPTY_SAM_ORN, R2
+	mov	#PARAM_CHANNEL_A, R4
+	add	R5, R4
+
+	mov	(PC)+, R3
+	.byte	AY_TONA, AY_AMPLITUDEA
+	call	FILL
+			
+	mov	(PC)+, R3
+	.byte	AY_TONB, AY_AMPLITUDEB
+	call	FILL
+			
+	mov	(PC)+, R3
+	.byte	AY_TONC, AY_AMPLITUDEC
+	call	FILL
+
+	mov	(SP)+, R5
+
+	movb	13.(R5), R0  
+	sub	#60, R0  
+	bcs	14$  
+	cmpb	R0, #10.
+	blo	15$
+14$:	mov	#6, R0   
+15$: 	mov	CUR_PARAMS_ADDR, R2
+	movb	R0, PARAM_VERSION(R2) 
+	mov	R0, -(SP)   
+	cmpb	R0, #4   
+	movb	99.(R5), R0
+	rolb	R0
+	bicb	#177770, R0
+
+NOTE_TABLE_MAKER:
+	mov	R1, -(SP)   
+	mov	#NT_DATA, R1
+	add	R0, R1
+	add	R0, R1
+	add	R0, R1  
+	clr	R2
+	bisb	(R1)+, R2   
+	mov	(PC)+, R0
+	nop	
+	tstb	(R1)+   
+	beq	10$
+	mov	(PC)+, R0   
+ 	clc	
+10$: 	mov	R0, MULTY_SUBR
+
+	clr	R3
+	bisb	(R1), R3
+	add	#TABLES, R3
+	add	(SP)+, R2   
+
+	mov	R3, -(SP)
+	mov	#PARAM_NOTE_TAB, R1 
+	add	CUR_PARAMS_ADDR, R1
+	mov	R1, -(SP)
+
+	mov	#12., R4 
+11$: 	mov	(R2)+, R3   
+
+	mov	R1, -(SP)
+	mov	#8., R5  
+12$:	clc
+	ror	R3
+	call	MULTY_SUBR   
+	mov	R3, R0
+	adc	R0
+	mov	R0, (R1)
+	add	#24., R1
+	sob	R5, 12$
+	mov	(SP)+, R1
+	tst	(R1)+   
+	sob	R4, 11$
+
+	mov	(SP)+, R2   
+	mov	(SP)+, R1   
+
+	cmp	R1, #TAB_C_OLD_1
+	bne	13$
+	mov	CUR_PARAMS_ADDR, R0
+
+	movb	#375, PARAM_NOTE_TAB+56(R0)	; 0xFD
+
+
+13$:	clr	R0
+	bisb	(R1)+, R0
+	beq	15$
+	clr	R5
+	rorb	R0  
+	rol	R5  
+	aslb	R0  
+	add	R0, R2  
+	tst	R5  
+	beq	14$
+	sub	#2, (R2)
+14$: 	inc	(R2)
+	sub	R0, R2 
+	br	13$
+
+15$: 	mov	(SP)+, R0   
+
+VOL_TABLE_MAKER:
+	mov	#21, R3 
+	clr	R1  
+	cmpb	R0, #5  
+	mov	(PC)+, R0
+	aslb	R0
+	bhis	10$
+	dec	R3  
+	mov	R3, R1  
+	mov	(PC)+, R0
+	nop	 
+10$: 	mov	R0, MULTY_SUBR
+
+	mov	#PARAM_VOL_TAB, R4 
+	add	CUR_PARAMS_ADDR, R4
+	mov	R4, R5
+	mov	#16., R2 
+	add	R2, R5
+	mov	#256./2, R0
+11$: 	clr	(R4)+   
+	sob	R0, 11$
+
+12$: 	mov	R3, -(SP)  
+
+	add	R3, R1  
+	mov	#0, R3  
+	sbc	R3  
+
+13$: 	movb	R3, R0  
+	mov	R3, R4  
+	clrb	R4
+	swab	R4  
+	call	MULTY_SUBR
+	adcb	R4
+	movb	R4, (R5)+
+	add	R1, R3
+	inc	R2  
+	mov	R2, R0
+	bic	#177760, R0
+	bne	13$
+	mov	(SP)+, R3
+	cmp	R1, #119.
+	bne	14$
+	inc	R1
+14$: 	tstb	R2  
+	bne	12$
+
+	jmp	REG_OUT
+
+MULTY_SUBR:
+	nop 
+	return
+
+; // Play //////////////////////////////////////////////////////////////////////
+
+Pt3Play:
+	; can we play at all?
+	tst	MusicEnabled
+	bne	10$
+99$:	return
+10$:	tst	END_OF_PT3FILE
+	bne	99$
+	; seems we can play
+
+	inc	FRAME_NUMBER
+	mov	#PARAMETERS_AY1, R4
+	tst	TS_PRESENT
+	beq	PLAY_NEXT
+	call	PLAY_NEXT
+	mov	#PARAMETERS_AY2, R4
+
+PLAY_NEXT:
+	mov	R4, CUR_PARAMS_ADDR
+	clr	PARAM_ADDTOENVELOPE(R4)
+	clrb	PARAM_AYREGS + AY_MIXER(R4)
+	movb	#-1, PARAM_AYREGS + AY_ENVELOPETYPE(R4)
+	decb	PARAM_DELAYCOUNTER(R4)
+ 	bhi	15$
+	mov	#PARAM_CHANNEL_A, R5
+ 	add	R4, R5
+ 	decb	CHP_NOTE_SKIP_COUNTER(R5)
+ 	bne	12$
+ 	mov	CHP_ADDRESS_IN_PATTERN(R5), R3
+ 	tstb	(R3)
+ 	bne	11$
+	clrb	PARAM_NOISE_BASE(R4)
+ 	mov	PARAM_CURRENTPOSITION(R4), R0
+ 	inc	R0						; R0 addr in patterns list
+ 	movb	(R0), R1					; R1 pattern #
+
+ 	cmpb	#377, R1
+ 	bne	10$
+
+ 	tst	NO_REPEAT_MODE
+ 	beq	100$
+
+	inc	END_OF_PT3FILE					; originally sets before testing for repeat	
+	incb	PARAM_DELAYCOUNTER(R4)
+	incb	PARAM_CHANNEL_A + CHP_NOTE_SKIP_COUNTER(R4)
+	jmp	Pt3Mute
+
+100$:	mov	PARAM_LOOPPOSITION(R4), R0
+ 	movb	(R0), R1
+
+	inc	REPETITION_NUMBER 				; Next repeat
+
+10$:	mov	R0, PARAM_CURRENTPOSITION(R4)
+	bic	#177400, R1
+	asl	R1
+	add	PARAM_PATTERNSPOINTER(R4), R1 
+ 	mov	PARAM_MODULE_ADDRESS(R4), R2
+
+	clr	R3
+ 	bisb	(R1)+, R3   
+ 	swab	R3
+ 	bisb	(R1)+, R3   
+ 	swab	R3   
+ 	add	R2, R3
+
+ 	clr	R0
+ 	bisb	(R1)+, R0
+	swab	R0
+	bisb	(R1)+, R0
+	swab	R0
+	add	R2, R0
+	mov	R0, PARAM_CHANNEL_B + CHP_ADDRESS_IN_PATTERN(R4)
+
+	clr	R0
+	bisb	(R1)+, R0
+	swab	R0
+	bisb	(R1)+, R0
+	swab	R0
+	add	R2, R0
+	mov	R0, PARAM_CHANNEL_C + CHP_ADDRESS_IN_PATTERN(R4)
+
+11$:	call	PATTERN_INTERPR
+ 	mov	R3, CHP_ADDRESS_IN_PATTERN(R5)
+
+12$: 	add	#CHP, R5
+	decb	CHP_NOTE_SKIP_COUNTER(R5)
+ 	bne	13$
+	mov	CHP_ADDRESS_IN_PATTERN(R5), R3
+ 	call	PATTERN_INTERPR
+ 	mov	R3, CHP_ADDRESS_IN_PATTERN(R5)
+
+13$: 	add	#CHP, R5
+	decb	CHP_NOTE_SKIP_COUNTER(R5)
+ 	bne	14$
+ 	mov	CHP_ADDRESS_IN_PATTERN(R5), R3
+ 	call	PATTERN_INTERPR
+ 	mov	R3, CHP_ADDRESS_IN_PATTERN(R5)
+
+14$: 	movb	PARAM_DELAY(R4), PARAM_DELAYCOUNTER(R4)
+
+15$: 	mov	#PARAM_CHANNEL_A, R5
+	add	R4, R5
+	call	CHANGE_REGS
+	call	CHANGE_REGS
+ 	call	CHANGE_REGS
+
+ 	movb	PARAM_NOISE_BASE(R2), R0  
+ 	add	PARAM_ADDTONOISE(R2), R0
+ 	movb	R0, PARAM_AYREGS + AY_NOISE(R2)
+
+	mov	PARAM_ENVELOPE_BASE(R2), R0
+	add	PARAM_ADDTOENVELOPE(R2), R0
+	add	PARAM_CUR_ENV_SLIDE(R2), R0
+	movb	R0, PARAM_AYREGS + AY_ENVELOPE(R2)
+	swab	R0
+	movb	R0, PARAM_AYREGS + AY_ENVELOPE + 1(R2)
+
+	mov	#PARAM_CUR_ENV_DELAY, R0
+	add	R2, R0
+	tstb	(R0)
+	beq	REG_OUT
+	decb	(R0)
+	bne	REG_OUT
+	movb	PARAM_ENV_DELAY(R2), (R0)
+	add	PARAM_ENV_SLIDE_ADD(R2), PARAM_CUR_ENV_SLIDE(R2)
+
+; // Device dependent procedure - copy registers to actual AY device (!)
+
+; AY registers ready
+REG_OUT:
+	mov	CUR_PARAMS_ADDR, R0		; params addr where -2 word have our AY device address
+	mov	R0, R4				; skip to AY actual registers bytes
+	mov	-(R0), AY_PORT_UKNC+2
+	tst	-(R0)
+	tst	-(R0)
+	add	#PARAM_AYREGS+AY_ENVELOPETYPE, R4
+
+AY_PORT_UKNC:	
+	mov	#000000, R5
+	mov	#15, R1
+	movb	(R4), R0
+	bmi	10$				; don't use reg #13. in some cases
+	mov	R1, (R5)
+	movb	R0, (R5)
+10$: 	dec	R1
+	bmi	11$
+	mov	R1, (R5)
+	movb	-(R4), (R5)
+	br	10$
+11$:	return
+
+
+; // Mute //////////////////////////////////////////////////////////////////////
+
+Pt3Mute:
+	tst	MusicEnabled
+	bne	10$
+	return
+
+10$:	inc	END_OF_PT3FILE				; just in case
+	mov	#PARAMETERS_AY1, R4
+	call	MUTE_NEXT
+	mov	#PARAMETERS_AY2, R4
+
+MUTE_NEXT:
+	mov	R4, CUR_PARAMS_ADDR
+	clr	PARAM_AYREGS + AY_AMPLITUDEA(R4)
+	clrb	PARAM_AYREGS + AY_AMPLITUDEC(R4)
+	movb	#77, PARAM_AYREGS + AY_MIXER(R4)
+	br	REG_OUT
+
+; /////////////////////////////////////////////////////////////////////////////
+
+PD_ORSM:
+	clrb	CHP_ENVELOPE_ENABLED(R5)
+	call	SET_ORNAMENT
+	movb	(R3)+, R0
+	br	PD_SAM_
+
+PD_SAM:
+	sub	#320, R0			; 0xD0
+	asl	R0
+
+PD_SAM_:
+	add	PARAM_SAMPLESPOINTERS(R4), R0
+	clr	R1
+	bisb	(R0)+, R1
+	swab	R1
+	bisb	(R0), R1
+	swab	R1
+	tst	R1
+	beq	10$
+	add	PARAM_MODULE_ADDRESS(R4), R1
+	mov	R1, CHP_SAMPLEPOINTER(R5)
+10$:	br	PD_LOOP
+
+PD_VOL: 	
+	bic	#177760, R0			; 0xFFF0
+	asl	R0
+	asl	R0
+	asl	R0
+	asl	R0
+	movb	R0, CHP_VOLUME(R5)
+	br	PD_LOOP
+
+PD_EOFF: 
+	clrb	CHP_ENVELOPE_ENABLED(R5)
+	clrb	CHP_POSITION_IN_ORNAMENT(R5)
+	br	PD_LOOP
+
+PD_SORE: 	
+	bic	#177760, R0			; 0xFFF0
+	decb	R0
+	bne	PD_ENV
+	movb	(R3)+, CHP_NUMBER_OF_NOTES_TO_SKIP(R5)
+	br	PD_LOOP
+
+PD_ENV: 
+	call	SET_ENVELOPE
+	clrb	CHP_POSITION_IN_ORNAMENT(R5)
+	br	PD_LOOP
+
+PD_ORN: 	
+	call	SET_ORNAMENT
+	br	PD_LOOP
+
+PD_ESAM: 	
+	clrb	CHP_ENVELOPE_ENABLED(R5)
+	bic	#177760, R0			; 0xFFF0
+	beq	10$
+	call	SET_ENVELOPE
+10$:	clrb	CHP_POSITION_IN_ORNAMENT(R5)
+	movb	(R3)+, R0
+	br	PD_SAM_
+
+PATTERN_INTERPR:
+	mov	CHP_NOTE(R5), PARAM_PRNOTE(R4)
+	mov	CHP_CURRENT_TON_SLIDING(R5), PARAM_PRSLIDING(R4)
+
+PD_LOOP: 
+	clr	R0
+	bisb	(R3)+, R0
+	cmpb	R0, #360			; 0xF0
+	bhis	PD_ORSM  
+	cmpb	R0, #320			; 0xD0
+	beq	PD_FIN  
+	bhi	PD_SAM  
+	cmpb	R0, #300			; 0xC0
+	beq	PD_REL  
+	bhi	PD_VOL
+	cmpb	R0, #260			; 0xB0
+	beq	PD_EOFF  
+	bhi	PD_SORE  
+  
+	cmpb	R0, #120			; 0x50
+	bhis	PD_NOTE  
+	cmpb	R0, #100			; 0x40
+	bhis	PD_ORN  
+	cmpb	R0, #40				; 0x20
+	bhis	PD_NOIS 
+	cmpb	R0, #20				; 0x10
+	bhis	PD_ESAM 
+
+	asl	R0
+	mov	SPEC_SUBR(R0), -(SP) 
+	br	PD_LOOP
+
+PD_NOIS:
+	bic	#177740, R0			; 0xFFE0
+	movb	R0, PARAM_NOISE_BASE(R4)
+	br	PD_LOOP
+
+PD_REL:
+	clrb	CHP_ENABLED(R5)
+	br	PD_RES
+
+PD_NOTE:	
+	sub	#120, R0			; 0x50
+	mov	R0, CHP_NOTE(R5)
+	movb	#-1, CHP_ENABLED(R5)
+
+PD_RES: 
+	mov	R5, R0
+	clr	(R0)+   
+	clr	(R0)+   
+	clr	(R0)+   
+	clr	(R0)+   
+	clr	(R0)+   
+	clr	(R0) 
+
+PD_FIN: 
+	movb	CHP_NUMBER_OF_NOTES_TO_SKIP(R5), CHP_NOTE_SKIP_COUNTER(R5)
+	return
+
+SUBR_PORTM:
+	clrb	CHP_SIMPLEGLISS(R5)
+	movb	(R3)+, R0
+
+ 	inc	R3
+	inc	R3
+	movb	R0, CHP_TON_SLIDE_DELAY(R5)
+	movb	R0, CHP_TON_SLIDE_COUNT(R5)
+	mov	CHP_NOTE(R5), R2
+	mov	R2, CHP_SLIDE_TO_NOTE(R5)
+	asl	R2
+	add	R4, R2
+	mov	PARAM_NOTE_TAB(R2), R2
+	mov	PARAM_PRNOTE(R4), R1
+	mov	R1, CHP_NOTE(R5)
+	asl	R1
+	add	R4, R1
+	mov	PARAM_NOTE_TAB(R1), R1
+	sub	R1, R2
+	mov	R2, CHP_TON_DELTA(R5)   
+	mov	CHP_CURRENT_TON_SLIDING(R5), R1
+	cmpb	PARAM_VERSION(R4), #6
+	blo	OLDPRTM  
+	mov	PARAM_PRSLIDING(R4), R1
+	mov	R1, CHP_CURRENT_TON_SLIDING(R5)
+
+OLDPRTM:
+ 	clr	R0
+	bisb	(R3)+, R0   
+	swab	R0
+	bisb	(R3)+, R0   
+	swab	R0
+	tst	R0   
+	bpl	10$
+	neg	R0
+10$:	sub	R1, R2  
+	bpl	11$
+	neg	R0
+11$:	mov	R0, CHP_TON_SLIDE_STEP(R5)
+	clrb	CHP_CURRENT_ONOFF(R5)
+	return	
+
+SUBR_GLISS:
+	movb	(PC), CHP_SIMPLEGLISS(R5)
+	movb	(R3)+, R0
+	movb	R0, CHP_TON_SLIDE_DELAY(R5)
+	bne	GL36
+ 
+	cmpb	PARAM_VERSION(R4), #7 
+	blo	GL36
+	incb	R0  
+GL36: 	movb	R0, CHP_TON_SLIDE_COUNT(R5)
+	movb	(R3)+, CHP_TON_SLIDE_STEP(R5) 
+	movb	(R3)+, CHP_TON_SLIDE_STEP + 1(R5) 
+	clrb	CHP_CURRENT_ONOFF(R5)
+	return
+
+SUBR_SMPOS:
+	movb	(R3)+, CHP_POSITION_IN_SAMPLE(R5)
+	return
+
+SUBR_ORPOS:
+	movb	(R3)+, CHP_POSITION_IN_ORNAMENT(R5)
+	return
+
+SUBR_VIBRT:
+	movb	(R3), CHP_ONOFF_DELAY(R5)
+	movb	(R3)+, CHP_CURRENT_ONOFF(R5)
+	movb	(R3)+, CHP_OFFON_DELAY(R5)
+	clrb	CHP_TON_SLIDE_COUNT(R5)
+	clr	CHP_CURRENT_TON_SLIDING(R5)
+	return
+
+SUBR_ENGLS:
+	movb	(R3), PARAM_ENV_DELAY(R4)
+	movb	(R3)+, PARAM_CUR_ENV_DELAY(R4)
+	movb	(R3)+, PARAM_ENV_SLIDE_ADD(R4)
+	movb	(R3)+, PARAM_ENV_SLIDE_ADD + 1(R4)
+	return
+
+SUBR_DELAY:
+	movb	(R3)+, PARAM_DELAY(R4)
+	return
+
+SET_ENVELOPE:
+	movb	#20, CHP_ENVELOPE_ENABLED(R5)		; 0x10
+	movb	R0, PARAM_AYREGS + AY_ENVELOPETYPE(R4)
+	movb	(R3)+, PARAM_ENVELOPE_BASE + 1(R4)
+	movb	(R3)+, PARAM_ENVELOPE_BASE(R4) 
+	clrb	PARAM_CUR_ENV_DELAY(R4)
+	clr	PARAM_CUR_ENV_SLIDE(R4)
+
+SUBR_NOP:
+	return
+
+SET_ORNAMENT:
+ 	bic	#177760, R0				; 0xFFF0
+	asl	R0
+	add	PARAM_ORNAMENTSPOINTERS(R4), R0
+	clr	R1
+	bisb	(R0)+, R1
+	swab	R1
+	bisb	(R0), R1
+	swab	R1
+	tst	R1
+	bne	10$
+	mov	#EMPTY_SAM_ORN, R1
+	br	11$
+10$:	add	PARAM_MODULE_ADDRESS(R4), R1
+11$:	mov	R1, CHP_ORNAMENTPOINTER(R5)
+	clrb	CHP_POSITION_IN_ORNAMENT(R5)
+	return
+
+SPEC_SUBR: 	
+	.word   SUBR_NOP
+	.word   SUBR_GLISS 
+	.word   SUBR_PORTM 
+	.word   SUBR_SMPOS 
+	.word   SUBR_ORPOS 
+	.word   SUBR_VIBRT 
+	.word   SUBR_NOP
+	.word   SUBR_NOP
+	.word   SUBR_ENGLS
+	.word   SUBR_DELAY 
+	.word   SUBR_NOP
+	.word   SUBR_NOP
+	.word   SUBR_NOP
+	.word   SUBR_NOP
+	.word   SUBR_NOP
+	.word   SUBR_NOP
+
+CHANGE_REGS:
+	clr	R1  
+	tstb	CHP_ENABLED(R5)
+	bne	CHANGE_REGS_NEXT
+
+CHANGE_REGS_EXIT:
+	movb	CHP_AMPL_REG(R5), R0
+	mov	CUR_PARAMS_ADDR, R2
+	add	R2, R0
+	movb	R1, PARAM_AYREGS(R0)
+	asrb	PARAM_AYREGS + AY_MIXER(R2)
+	tstb	CHP_CURRENT_ONOFF(R5)
+	beq	11$
+	decb	CHP_CURRENT_ONOFF(R5)
+	bne	11$
+	movb	CHP_ONOFF_DELAY(R5), R0
+	comb	CHP_ENABLED(R5)
+	bne	10$
+	movb	CHP_OFFON_DELAY(R5), R0
+10$:	movb	R0, CHP_CURRENT_ONOFF(R5)
+11$:	add	#CHP, R5
+	return
+
+CHANGE_REGS_NEXT:
+	mov	CHP_ORNAMENTPOINTER(R5), R1 
+	movb	(R1)+, R4   
+	movb	(R1)+, R3   
+	movb	CHP_POSITION_IN_ORNAMENT(R5), R0 
+	add	R0, R1
+	incb	R0
+	cmpb	R0, R3
+	blo	10$
+	movb	R4, R0
+10$:	movb	R0, CHP_POSITION_IN_ORNAMENT(R5)
+	mov	CHP_NOTE(R5), R0 
+	movb	(R1), R1 
+	add	R1, R0
+	bpl	11$
+	clr	R0
+11$:	cmp 	R0, #96.
+	blo	12$
+	mov	#95., R0
+12$:	asl 	R0
+	mov	R0, -(SP)   
+	mov	CHP_SAMPLEPOINTER(R5), R1   
+	movb	(R1)+, R4   
+	movb	(R1)+, R3   
+	movb	CHP_POSITION_IN_SAMPLE(R5), R0
+	add	R0, R1
+	add	R0, R1
+	add	R0, R1
+	add	R0, R1
+	incb	R0
+	cmpb	R0, R3
+	blo	13$
+	movb	R4, R0
+13$:	movb 	R0, CHP_POSITION_IN_SAMPLE(R5)
+	movb	(R1)+, R3   
+	movb	(R1)+, R4   
+	clr	R2
+	bisb	(R1)+, R2   
+	swab	R2
+	bisb	(R1), R2
+	swab	R2
+	add	CHP_TON_ACCUMULATOR(R5), R2
+	bit	#100, R4   				; 0x40
+	beq	14$
+	mov	R2, CHP_TON_ACCUMULATOR(R5)
+14$:	mov	(SP)+, R1   
+	add	CUR_PARAMS_ADDR, R1
+	add	PARAM_NOTE_TAB(R1), R2 
+	mov	CHP_CURRENT_TON_SLIDING(R5), R1 
+	add	R1, R2  
+	bic	#170000, R2				; 0xF000
+	movb	CHP_TONE_REG(R5), R0
+	add	CUR_PARAMS_ADDR, R0
+	mov	R2, PARAM_AYREGS(R0)  
+
+	tstb	CHP_TON_SLIDE_COUNT(R5)
+	beq	17$
+	decb	CHP_TON_SLIDE_COUNT(R5)
+	bne	17$
+	movb	CHP_TON_SLIDE_DELAY(R5), CHP_TON_SLIDE_COUNT(R5)
+	mov	CHP_TON_SLIDE_STEP(R5), R2
+	add	R2, R1  
+	mov	R1, CHP_CURRENT_TON_SLIDING(R5)
+	tstb	CHP_SIMPLEGLISS(R5) 
+	bne	17$
+	mov	CHP_TON_DELTA(R5), R0
+
+	tst	R2  
+	bpl	15$
+
+	cmp	R1, R0
+	ble	16$
+
+	br	17$
+
+15$:	cmp	R1, R0
+	blt	17$
+16$:	mov	CHP_SLIDE_TO_NOTE(R5), CHP_NOTE(R5)
+	clrb	CHP_TON_SLIDE_COUNT(R5)
+	clr	CHP_CURRENT_TON_SLIDING(R5)
+
+17$: 	movb	CHP_CURRENT_AMPLITUDE_SLIDING(R5), R0   
+	bit	#200, R3   				; 0x80
+	beq	110$
+	bit	#100, R3   				; 0x40
+	beq	18$
+	cmp	R0, #15.				; blaire: faster than CMPB?
+	beq	110$
+	inc	R0   					; blaire: faster than INCB?
+	br	19$ 
+18$:
+	cmp	R0, #-15.				; blaire: changed to CMP (was CMPB)
+	beq	110$
+	dec	R0   					; blaire: changed to DEC (was DECB)
+
+19$:	movb 	R0, CHP_CURRENT_AMPLITUDE_SLIDING(R5)
+110$: 	mov	R4, R1  
+	bic	#177760, R1 				; 0xFFF0
+	add	R1, R0  				; blaire: maybe here was a problem with above changes
+	bpl	111$
+	clr	R0
+111$:	cmp	R0, #16.
+	blo	112$
+	mov	#15., R0 
+112$:	bisb	CHP_VOLUME(R5), R0  
+	add	CUR_PARAMS_ADDR, R0
+	movb	PARAM_VOL_TAB(R0), R1 
+	bit	#1, R3  
+	bne	113$
+	bisb	CHP_ENVELOPE_ENABLED(R5), R1 
+113$:	mov	R3, R0
+	asr	R0
+	bic	#177740, R0				; 0xFFE0
+	bit	#200, R4				; 0x80
+	beq	116$
+	bit	#20, R0					; 0x10
+	beq	114$
+	bis	#177740, R0				; 0xFFE0
+114$:	add	CHP_CURRENT_ENVELOPE_SLIDING(R5), R0
+	bit	#40, R4					; 0x20
+	beq	115$
+	mov	R0, CHP_CURRENT_ENVELOPE_SLIDING(R5)
+115$: 	mov	CUR_PARAMS_ADDR, R2
+	add	R0, PARAM_ADDTOENVELOPE(R2)
+	br	117$
+
+116$: 	movb	CHP_CURRENT_NOISE_SLIDING(R5), R3   
+	add	R3, R0
+	mov	CUR_PARAMS_ADDR, R2
+	mov	R0, PARAM_ADDTONOISE(R2)
+	bit	#40, R4					; 0x20
+	beq	117$
+	movb	R0, CHP_CURRENT_NOISE_SLIDING(R5)
+
+117$:	asr	R4  
+	bic	#177667, R4 
+	bisb	R4, PARAM_AYREGS + AY_MIXER(R2)
+	jmp	CHANGE_REGS_EXIT
+
+FILL:	mov	R0, CHP_NOTE_SKIP_COUNTER(R4)
+	mov	R2, CHP_ADDRESS_IN_PATTERN(R4)  
+	mov	R2, CHP_ORNAMENTPOINTER(R4) 
+	mov	R2, CHP_SAMPLEPOINTER(R4)   
+	mov	R3, CHP_TONE_REG(R4)
+	add	#CHP, R4
+	return
+
+TABLES:
+
+TAB_C_OLD_0:
+ 	.byte	0 + 1, 4 + 1, 10 + 1, 12 + 1, 14 + 1, 16 + 1, 22 + 1, 24 + 1
+ 	.byte	30 + 1, 44 + 1, 74 + 1, 0
+TAB_C_NEW_1:
+TAB_C_OLD_1:
+ 	.byte	134 + 1, 0
+TAB_C_OLD_2:
+	.byte	60 + 1, 66 + 1, 114 + 1, 122 + 1, 136 + 1, 160 + 1, 202, 214
+ 	.byte	234, 236, 240, 246, 250, 252, 254, 256, 256, 0
+
+TAB_C_NEW_3:
+	.byte	126 + 1
+TAB_C_OLD_3:
+	.byte	36 + 1, 42 + 1, 44 + 1, 50 + 1, 54 + 1, 56 + 1, 62 + 1, 276 + 1, 0
+
+TAB_C_NEW_0:
+ 	.byte	34 + 1, 40 + 1, 42 + 1, 46 + 1, 52 + 1, 54 + 1, 60 + 1, 124 + 1
+	.byte	274 + 1, 276 + 1, 0
+
+TAB_C_NEW_2:
+	.byte	32 + 1, 40 + 1, 44 + 1, 50 + 1, 52 + 1, 72 + 1, 114 + 1, 136 + 1
+	.byte	272 + 1, 274 + 1, 276 + 1, 0
+
+EMPTY_SAM_ORN:
+	.byte	0, 1, 0, 220, 0, 0
+	.even
+EMPTY_SAM_ORN_END:
+
+TABLES_PACK:
+ 	.word	3354
+	.byte	3525-3354
+	.byte	3705-3525
+	.byte	4073-3705
+	.byte	4270-4073
+	.byte	4475-4270
+	.byte	4712-4475
+	.byte	5137-4712
+	.byte	5374-5137
+	.byte	5644-5374
+	.byte	6125-5644
+	.byte	6420-6125
+	.byte	13.
+	.even
+	.word	3155
+	.byte	3317-3155
+	.byte	3467-3317
+	.byte	3644-3467
+	.byte	4031-3644
+	.byte	4224-4031
+	.byte	4427-4224
+	.byte	4641-4427
+	.byte	5063-4641
+	.byte	5317-5063
+	.byte	5563-5317
+	.byte	6042-5563
+	.byte	6332-6042
+	.byte	12.
+	.even
+	.word	3404
+	.byte	3556-3404
+	.byte	3740-3556
+	.byte	4130-3740
+	.byte	4326-4130
+	.byte	4534-4326
+	.byte	4754-4534
+	.byte	5202-4754
+	.byte	5442-5202
+	.byte	5714-5442
+	.byte	6200-5714
+	.byte	6476-6200
+	.byte	12.
+	.even
+	.word	3740
+	.byte	4130-3740
+	.byte	4340-4130
+	.byte	4540-4340
+	.byte	4760-4540
+	.byte	5210-4760
+	.byte	5450-5210
+	.byte	5730-5450
+	.byte	6200-5730
+	.byte	6540-6200
+	.byte	7020-6540
+	.byte	7370-7020
+	.even
+
+NT_DATA:
+	.byte   PARAM_TAB_WORK_NEW_0 - PARAM_TAB_WORK, 0, TAB_C_NEW_0 - TABLES
+	.byte   PARAM_TAB_WORK_OLD_0 - PARAM_TAB_WORK, 1, TAB_C_OLD_0 - TABLES
+	.byte   PARAM_TAB_WORK_NEW_1 - PARAM_TAB_WORK, 1, TAB_C_NEW_1 - TABLES
+	.byte   PARAM_TAB_WORK_OLD_1 - PARAM_TAB_WORK, 1, TAB_C_OLD_1 - TABLES
+	.byte   PARAM_TAB_WORK_NEW_2 - PARAM_TAB_WORK, 0, TAB_C_NEW_2 - TABLES
+	.byte   PARAM_TAB_WORK_OLD_2 - PARAM_TAB_WORK, 0, TAB_C_OLD_2 - TABLES
+	.byte   PARAM_TAB_WORK_NEW_3 - PARAM_TAB_WORK, 0, TAB_C_NEW_3 - TABLES
+	.byte   PARAM_TAB_WORK_OLD_3 - PARAM_TAB_WORK, 0, TAB_C_OLD_3 - TABLES
+	.even
+
+; clear this RAM data?
+
+; Two AY devices params data
+PARAM_DEVICES_AY1:
+	.word	0, 0, 0
+PARAMETERS_AY1:
+	.blkb	PARAM_SIZE
+	.even
+PARAM_DEVICES_AY2:
+	.word	0, 0, 0
+PARAMETERS_AY2:
+	.blkb	PARAM_SIZE
+	.even 
+
+MusicTable:
+	.word	M_Menu, M_MenuEnd
+	.word	M_Over, M_OverEnd
+	.word	M_Win, M_WinEnd
+
+M_Menu:
+	@includebin ./music/krakout_menu_2.pt3
+M_MenuEnd:
+
+M_Over:
+	@includebin ./music/krakout_over.pt3
+M_OverEnd:
+
+M_Win:
+	@includebin ./music/krakout_win.pt3
+M_WinEnd:
+
+	.even

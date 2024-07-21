@@ -1,0 +1,250 @@
+	.title	MAIN
+	.list	MEB
+	.enabl	LC ; without AMA, contains relocatable code
+	
+	.asect
+	.=1000
+
+@include common.mac
+
+Start:	mtps	#200				; stop right there, you interrupts
+	mov	#1000, SP			; just in case
+	
+	; run PPU first
+	mov	#1, @#PpuComm
+	; start PPU launcher code
+	mov	#PpuLoaderStart, R4
+	mov	#PpuLoaderEnd-PpuLoaderStart/2, R5
+	call	PPRun
+	; check when its ready
+	tst	@#PpuComm
+	bne	.-4
+
+	; relocate CPU unpacker and code
+	mov	#CpuData, R0
+	mov	#PpuComm-UnpackEnd+CpuData, R1
+	mov	#UnpackEnd-CpuData/2, R3
+	mov	(R0)+, (R1)+
+	sob	R3, .-2
+	; unpack and run CPU
+	jmp	@#PpuComm-UnpackEnd+UnpackRun	
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // CPU <-> PPU
+; //////////////////////////////////////////////////////////////////////////////
+
+; PPU message
+PPMSG:	.word	PPARR				; address of beginning of array
+        .word	177777				; end of transmission
+
+; PPU data exchange array
+PPARR:	.byte	0				; return value (0 - OK)
+PPCMD:	.byte	0				; command
+	.word	32				; device type (32 - PPU mem)
+PPAPP:	.word	0				; address for PPU
+PPACP:	.word	0				; address for CPU
+PPLEN:	.word	0				; length in words
+
+; send command to PPU with exch array
+PPSen:	mov	#PPMSG, R0			; array address
+	mov	#5, R1				; bytes to send+1 (sending from @#PP_MSG)
+	br	1$
+2$:	movb	(R0)+, @#176676
+1$:	tstb	@#176674			; test if we are ready to send
+	bpl	1$				; cycle if >= 0 (not set last bit in byte)
+	sob	R1, 2$
+	return
+
+; send and start PPU code
+; R4 - start addr in CPU
+; R5 - length / 2
+PPRun:	movb	#1, PPCMD			; 1 - allocate memory
+	mov	R5, PPLEN
+	call	PPSEN			
+	; (!) warn - no testing for success (!)
+	movb	#20, PPCMD			; 20 - write to PPU mem
+	mov	R5, PPLEN
+	mov 	R4, PPACP
+	call	PPSEN
+	movb	#30, PPCMD			; 30 - run
+	call	PPSEN
+	return 
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // PPU Loader (run in PPU)
+; //////////////////////////////////////////////////////////////////////////////
+
+PP_LOADER_ADDR = 77400
+
+PpuLoaderStart:
+	mtps	#200
+	clr	R0
+	call	@7132(R0)			; stop FD
+	mov	#361, @#177054			; set ROM banks as VRAM
+	; relocate code to the top of RAM
+	mov	PC, R0
+	add	#PpuLoaderUnp-., R0
+	mov	#PP_LOADER_ADDR, R1
+	mov	#PpuLoaderEnd-PpuLoaderUnp/2, R3
+	mov	(R0)+, (R1)+
+	sob	R3, .-2
+	jmp	@#PP_LOADER_ADDR
+	
+; unpack CPU RAM -> PPU RAM and run
+PpuLoaderUnp:
+	mov	#PpuData, R0			; source cpu addr
+	clr	R1				; dest ppu addr
+	mov	#PP_LOADER_ADDR, SP
+	call	UnpR12
+	mov	#1000, SP
+	jmp	(SP)
+
+; get CPU RAM byte -> R0 and advance addr
+GetB12:	mov	(PC)+, R0
+GetA12:	.word	0
+	inc	GetA12
+	clc					; set to 'sec' for use with vram12
+	ror	R0
+	bcs	10$
+	mov	R0, @#177010
+	movb	@#177014, R0
+	return
+10$:	mov	R0, @#177010
+	movb	@#177015, R0
+	return
+
+; ZX0 v2.2 unpacker modified for CPU RAM -> PPU RAM
+; original ZX0 encoder/decoder (c) Einar Saukas & Urusergi
+; PDP11 version by reddie, 02-may-2024 (upd)
+; R0 = source data addr (compressed) in CPU RAM (!)
+; R1 = addr for decompressing data
+UnpR12:	mov	R0, GetA12
+	clr	R2
+	movb	#200, R3
+	sxt	R5
+10$:	call	50$
+	;
+12$:	call	GetB12				; movb	(R0)+, (R1)+
+	movb	R0, (R1)+			; sob	R2, .-2
+	sob	R2, 12$				;
+	;
+	aslb	R3
+	bcs	30$
+	call	50$
+20$:	mov	R1, R4
+	add	R5, R4
+	movb	(R4)+, (R1)+
+	sob	R2, .-2
+	aslb	R3
+	bcc	10$
+30$:	mov	#-2, R2
+	call	60$
+	incb	R2
+	bne	.+4
+40$:	return
+	swab	R2
+	mov	R2, R5
+	clrb	R5
+	;
+	call	GetB12				; bisb	(R0)+, R5
+	bisb	R0, R5				;
+	;
+	asr	R5
+	mov	#1, R2
+	bcs	.+6
+	call	80$
+	inc	R2
+	br	20$
+50$:	incb	R2
+60$:	aslb	R3
+	bne	70$
+	;
+	rol	R4				; save C-flag
+	call	GetB12				; movb	(R0)+, R3
+	movb	R0, R3				;
+	ror	R4				; restore C-flag
+	;
+	rolb	R3
+70$:	bcs	40$
+80$:	aslb	R3
+	rol	R2
+	br	60$
+	
+PPULoaderEnd:
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // CPU packed data and unpacker
+; //////////////////////////////////////////////////////////////////////////////
+
+CpuData:
+	@includebin _acpu_lz.bin
+	.even
+CpuDataEnd:
+
+; stack data
+	.blkw	40
+
+; unpack and run CPU
+UnpackRun:
+	mov	#PpuComm-UnpackEnd+CpuData, R0
+	clr	R1
+	mov	#PpuComm-UnpackEnd+UnpackRun, SP
+	call	@#PpuComm-UnpackEnd+Unpack
+	mov	#1000, SP
+	jmp	(SP)
+
+Unpack:	clr	R2
+	movb	#200, R3
+	sxt	R5
+10$:	call	50$
+	movb	(R0)+, (R1)+
+	sob	R2, .-2
+	aslb	R3
+	bcs	30$
+	call	50$
+20$:	mov	R1, R4
+	add	R5, R4
+	movb	(R4)+, (R1)+
+	sob	R2, .-2
+	aslb	R3
+	bcc	10$
+30$:	mov	#-2, R2
+	call	60$
+	incb	R2
+	bne	.+4
+40$:	return
+	swab	R2
+	mov	R2, R5
+	clrb	R5
+	bisb	(R0)+, R5
+	asr	R5
+	mov	#1, R2
+	bcs	.+6
+	call	80$
+	inc	R2
+	br	20$
+50$:	incb	R2
+60$:	aslb	R3
+	bne	70$
+	movb	(R0)+, R3
+	rolb	R3
+70$:	bcs	40$
+80$:	aslb	R3
+	rol	R2
+	br	60$
+UnpackEnd:
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // PPU packed data
+; //////////////////////////////////////////////////////////////////////////////
+
+PpuData:
+	@includebin _appu_lz.bin
+	.even
+PpuDataEnd:
+
+	.end	Start

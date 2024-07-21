@@ -1,0 +1,3672 @@
+	.title	CPU
+	.list	MEB
+	.enabl	LC, AMA
+	
+	.asect
+	.=0
+
+@include common.mac
+@include cpu_header.mac
+
+Start:	; clean upper CPU RAM
+	mov	#CpuEnd, R0
+	mov	#157776-CpuEnd/2, R3
+	clr	(R0)+
+	sob	R3, .-2
+
+	; clear screen planes 12
+	call	ClearPlanes12
+
+	; set vsync int
+	mov	#VsyInt, @#100
+
+	; prepare tables etc.
+	call	ClearScreen
+	call	FillKVAddrs
+	call	FillAngToDir
+
+	; all is set
+	clr	CurrentMode
+	mtps	#0
+
+
+; main program cycle
+MainCycle:
+	call	WaitVsync
+	inc	FrameCount
+	; key STOP - restart game
+	tst	KeyStop
+	beq	10$
+	clr	KeyStop			; release STOP
+	clr	Pause			; unpause
+	clr	CurrentMode		; reset mode
+10$:	; run procedures
+	mov	CurrentMode, R0
+	asl	R0
+	call	@MainCycleTable(R0)
+	br	MainCycle
+
+
+MainCycleTable:	
+	.word	MainReset			; 00. - reset
+	.word	MainMenu			; 01. - menu
+	.word	MainPrepare			; 02. - global prepare
+	.word	MainPreLevel			; 03. - Level prepare
+	.word	MainLevel			; 04. - Level play
+	.word	MainLevelEnd			; 05. - Level ends
+	.word	MainLiveLost			; 06. - Live lost
+	.word	MainGameOver			; 07. - It's over
+	.word	MainGameWin			; 08. - Win game
+
+
+; 00 - reset anything to a new and draw a menu
+MainReset:
+	call	MusicMute
+	call	ClearScreen
+	; draw 'krakout' tiles
+	mov	#50., R2
+	mov	#22.*C_SCRWID+8.+C_VADDR2, R4
+	mov	#7., R3
+	call	100$
+	mov	#60., R2
+	mov	#38.*C_SCRWID+8.+C_VADDR2, R4
+	mov	#7., R3
+	call	100$
+	; print menu lines
+	; 1 - palette
+	mov	#Str002, R0
+	mov	#C_MENUY+15.*C_SCRWID+9.+C_VADDR2, R5
+	call	PrintStr
+	; 2 - sound
+	mov	#Str003, R0
+	mov	#C_MENUY+40.*C_SCRWID+9.+C_VADDR2, R5
+	call	PrintStr
+	; 3 - cheat
+	mov	#Str004, R0
+	mov	#C_MENUY+65.*C_SCRWID+9.+C_VADDR2, R5
+	call	PrintStr
+	; press space
+	mov	#Str000, R0
+	mov	#C_MENUY+110.*C_SCRWID+10.+C_VADDR2, R5
+	call	PrintStr
+	; next mode
+	call	DuplicateScreen
+	call	PrintMenuPalette
+	call	PrintMenuCheat
+	call	PrintMenuSound
+	clr	R0				; song # = 0
+	mov	#1, R1				; no repeat
+	call	MusicInit
+	mov	#30., MusicDelay		; delay a bit
+	; prepare animations
+	call	FBufReset
+	call	ScrollPrepare
+	call	MenuBallPrepare
+	; next mode
+	clr	KeyCurrent
+	inc	CurrentMode
+	return
+100$:	; draw line of tiles from R2 (R3 times)
+	mov	R4, R5
+	mov	R2, R0
+	mov	R4, -(SP)
+	call	DrawTile
+	mov	(SP)+, R4
+	add	#2., R4
+	inc	R2
+	sob	R3, 100$
+	return
+
+
+; 01 - main menu
+MainMenu:
+	call	ScrollBottom
+	call	MenuBallProc
+	call	MusicPlay
+	; start game
+	cmp	KeyCurrent, #C_KEY_SPACE
+	bne	10$
+	call	MusicMute
+	clr	KeyCurrent
+	inc	CurrentMode
+	return
+10$:	cmp	KeyCurrent, #C_KEY_1
+	bne	20$
+	clr	KeyCurrent
+	call	MenuSound
+	mov	Palette, R0	
+	inc	R0
+	bic	#^B1111111111111100, R0
+	mov	R0, Palette
+	call	SetPalette
+	jmp	PrintMenuPalette
+20$:	cmp	KeyCurrent, #C_KEY_2
+	bne	30$
+	clr	KeyCurrent
+	call	MenuSound	
+	com	UseSound
+	jmp	PrintMenuSound
+30$:	cmp	KeyCurrent, #C_KEY_3
+	bne	40$
+	clr	KeyCurrent
+	call	MenuSound	
+	com	UseCheat
+	jmp	PrintMenuCheat
+40$:	return
+
+
+; 02 - global prepare play
+MainPrepare:
+	clr	Level
+	clr	Score
+	mov	#20., Lives
+	inc	CurrentMode
+	return
+
+
+; 03 - Level prepare
+MainPreLevel:
+	call	ClearScreen
+	call	FBufReset
+	call	LevelIntro			; introduction of level (if any)
+	call	LoadLevel			; load level
+	call	ClearNpc			; clear npc's 
+	call	DefCoords			; default ball and bat coords
+	clr	KeyCurrent			; clear keys just in case
+	call	DrawBackground			; draw some background things (score, level, lives)
+	inc	CurrentMode
+	return
+
+
+; 04 - play Level
+MainLevel:
+	; key UST - pause
+	tst	KeyUst
+	beq	10$
+	clr	KeyUst
+	com	Pause
+10$:	tst	Pause
+	beq	20$
+	return
+20$:	; key UST - pause
+
+;	;
+;	; debug info
+;	;
+;	bit	#^B11111, FrameCount		; once in 32. frames
+;	bne	1$
+;	mov	WaitVsync+2, R0
+;	clr	WaitVsync+2
+;	asr	R0				; /=32.
+;	asr	R0
+;	asr	R0
+;	asr	R0
+;	asr	R0
+;	mov	#C_SCRWID*4.+1.+C_VADDR, R1
+;	call	PrintOctalWord
+1$:	; DEBUG: key 1
+	cmp	KeyCurrent, #C_KEY_1
+	bne	2$
+	clr	KeyCurrent
+	mov	#C_MODE_LEVEND, CurrentMode
+2$:	; key 2 - game over
+	cmp	KeyCurrent, #C_KEY_2
+	bne	3$
+	clr	KeyCurrent
+	mov	#C_MODE_OVER, CurrentMode
+3$:	; key 3 - max level
+	cmp	KeyCurrent, #C_KEY_3
+	bne	4$
+	clr	KeyCurrent
+	mov	#C_LEVEL_MAX-1, Level
+	mov	#C_MODE_LEVEND, CurrentMode
+4$:	; end debug info
+	;
+
+	; queue sprites for drawing in PPU
+	call	DrawNpc
+	call	DrawBat
+	call	DrawBossBat
+	call	DrawBall
+	call	QueueFBDraw
+	call	QueueFBClear
+	call	RunQueue
+	; sound & print
+	call	ProcessSound			; (maybe) sound effect	
+	call	PrintScore			; (maybe) draw score
+	call	PrintLevel			; (maybe) draw level and lives
+	; logic
+	call	TestLevelEnd			; test for level end
+	call	LostDo				; lost state processing
+	call	BatDo				; process bat
+	call	BatBossProc			; process boss bat
+	call	NpcDo				; process npc
+	call	NpcSpa				; spawn npc
+	call	BallDo				; process ball moving
+	call	KeffProcess			; change background
+	return
+
+
+; 05 - level end
+MainLevelEnd:
+	inc	Level				; level++
+	mov	#C_MODE_PRELEV, CurrentMode
+	cmp	Level, #C_LEVEL_MAX		; max level?
+	blos	99$
+	mov	#C_MODE_WIN, CurrentMode
+99$:	return
+
+
+; 06 - live lost
+MainLiveLost:
+	tstb	YouWin				; win a boss fight?
+	beq	10$
+	br	MainLevelEnd			; TODO: win screen
+10$:	call	ClearScreen
+	call	ClearNpc
+	call	DefCoords
+	clr	KeyCurrent
+	call	DrawBackground
+	mov	#C_MODE_PLAY, CurrentMode
+	return
+
+
+; 07 - game over
+MainGameOver:
+	; print some text and play music
+	call	ClearScreen
+	mov	#StrOver, R0			; GAME OVER
+	mov	#110.*C_SCRWID+16.+C_VADDR2-5., R5
+	call	PrintStr
+	call	DuplicateScreen
+	mov	#1, R0				; song #
+	mov	#1, R1				; <>0 = no repeat
+	call	MusicInit
+	mov	#10., MusicDelay		; delay a bit
+	mov	#150., 20$+2			; wait 3 sec
+10$:	call	WaitVsync
+	call	MusicPlay
+20$:	dec	#150.
+	bne	10$
+	; mode to reset
+	mov	#C_MODE_RESET, CurrentMode
+	return
+
+
+; 08 - win
+MainGameWin:
+	call	ClearScreen
+	mov	#StrWin, R0
+	mov	#110.*C_SCRWID+16.+C_VADDR2-4., R5
+	call	PrintStr
+	call	DuplicateScreen
+	mov	#2, R0
+	clr	R1				; 0 = repeat
+	call	MusicInit
+	mov	#10., MusicDelay
+	clr	KeyCurrent
+	mov	#WinAnimData, WinAnimAddr
+	call	StarsAnimPrep
+10$:	call	WaitVsync
+	call	WinAnimTick
+	call	StarsAnimTick
+	call	MusicPlay
+	inc	FrameCount
+	tst	KeyCurrent
+	beq	10$
+	; mode to reset
+	call	MusicMute
+	mov	#C_MODE_RESET, CurrentMode
+	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Utils
+; //////////////////////////////////////////////////////////////////////////////
+
+; empty interrupt
+RtiAdr:	rti
+
+
+; vsync interrupt
+VsyInt:	inc	VsyncCount1
+	rti
+
+
+; wait for vsync proc
+WaitVsync:
+	inc	#000000				; empty cycles count for debug
+	tst	VsyncCount1
+	beq	WaitVsync
+	clr	VsyncCount1
+	return
+
+
+; prepare regs for vaddr
+SetVreg:
+	mov	#176640, R4
+	mov	#176642, R5
+	return
+
+
+; clear screen planes 1,2
+ClearPlanes12:
+	call	SetVreg
+	mov	#40000, R3
+	mov	#C_VBUF1, (R4)
+10$:	clr	(R5)
+	inc	(R4)
+	sob	R3, 10$
+	return
+
+
+; Galois LFSR 8-bit
+Galois8bit:
+	clc
+20$:	ror	#123
+	bcc	30$
+	mov	#^B0000000010111000, R0
+	xor	R0, 20$+2
+30$:	mov	20$+2, R0
+	return
+
+
+; Galois LFSR 16-bit
+Random:	clc
+	ror	(PC)+
+Lfsr00:	.word	126341
+	bcc	Lfsr03
+	mov	(PC)+, R0
+Lfsr01:	.word	132000
+	xor	R0, Lfsr00
+Lfsr03:	mov	Lfsr00, R0
+	return
+
+
+; random 0..255.
+Rnd256:	call	Random
+	asr	R0
+	asr	R0
+	asr	R0
+	asr	R0
+	bic	#^B1111111100000000, R0
+	return
+
+
+; execute something in PPU
+; R5 - # to execute
+PpuExecute:
+	tst	PpuComm				; area we free to exec?
+	bne	.-4
+	mov	R0, PpuCommR0
+	mov	R1, PpuCommR1
+	mov	R2, PpuCommR2
+	mov	R3, PpuCommR3
+	mov	R5, PpuComm
+	return
+
+
+; run PPU queue
+RunQueue:
+	tst	PpuComm
+	bne	.-4
+	mov	#C_PPU_QUEUEEXE, PpuComm
+	return
+
+
+; palettes (2-words each)
+PalTable:
+	.word	^B1111100111111000, ^B1111110111111100	; default for GRB
+	.word	^B1111100111111000, ^B1111101111111010	; RGB
+	.word	^B1111101011111000, ^B1111110111111011
+	.word	^B1111111011111000, ^B1111100111111101
+
+; set palette
+SetPalette:
+	mov	Palette, R4
+	asl	R4
+	asl	R4
+	mov	PalTable(R4), R0
+	mov	PalTable+2(R4), R1
+	mov	#C_PPU_PALUPD, R5
+	call	PpuExecute
+	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Drawing
+; //////////////////////////////////////////////////////////////////////////////
+
+; return R0 - vram from kub s-addr (vaddr without 100000 addition!)
+VramFromKSaddr:
+	mov	R0, R1
+	bic	#^B1111111100001111, R1			; Y * 16
+	mul	#C_SCRWID, R1
+	bic	#^B1111111111110000, R0
+	asl	R0
+	add	R1, R0
+	return
+
+
+; reset fbuf
+FBufReset:
+	mov	#C_PPU_RESEFBUF, R5
+	jmp	PpuExecute
+
+
+; clear screen by random placing kubs
+ClearScreen:
+	; clear second screen - ppu
+	tst	PpuComm
+	bne	.-4
+	mov	#C_PPU_CLEARSC2, PpuComm
+	; clear second screen - cpu
+	call	SetVreg
+	mov	#C_VBUF2, (R4)
+	mov	#C_SCRSIZE, R3
+10$:	clr	(R5)
+	inc	(R4)
+	sob	R3, 10$
+	; and duplicate it
+
+DuplicateScreen:
+	mov	#255., 20$+2
+	call	SetVreg
+10$:	call	Galois8bit			; R0 = random 1..255
+	call	50$
+20$:	dec	#000000
+	bne	10$
+	clr	R0				; and now last zero kub (Galois LFSR can't use 0)
+50$:	; mov kub by R0
+	tst	PpuComm				; wait for PPU
+	bne	.-4				;
+	mov	R0, PpuCommR0			; PPU arg
+	mov	#C_PPU_COPYKUB2, PpuComm	; ask PPU to copy kub
+	call	VramFromKSaddr
+	mov	R0, R1
+	add	#C_VADDR1, R0
+	add	#C_VADDR2, R1
+	mov	#16., R3
+60$:	mov	R1, (R4)
+	mov	(R5), R2
+	mov	R0, (R4)
+	mov	R2, (R5)
+	inc	R0
+	inc	R1
+	mov	R1, (R4)
+	mov	(R5), R2
+	mov	R0, (R4)
+	mov	R2, (R5)
+	add	#C_SCRWID-1, R0
+	add	#C_SCRWID-1, R1
+	sob	R3, 60$
+	return
+
+
+; print octal word (4x5 font), R0 - word, R1-vram addr
+PrintOctal:
+	return	 
+
+
+; print string
+; R0 - text addr
+; R5 - vaddr
+; codes in string - [0..7] - change color
+PrintStr:
+	mov	R5, R1					; PPU use R1 as vaddr
+	mov	#C_PPU_PRINTSTR, R5
+	call	PpuExecute
+	return 
+
+
+; print decimal number (5 digits)
+; R0 - number, R5 - vaddr
+; print in two scr buf
+PrintDecA:	.asciz	"00000"
+PrintDecD:	.word	10000., 1000., 100., 10.
+
+PrintDecimal5:
+	mov	R5, -(SP)
+	mov	#PrintDecA, -(SP)
+	mov	(SP), R5
+	mov	#PrintDecD, R4
+	mov	#4, R3
+PrintDecimalX:
+10$:	mov	(R4)+, R1
+	mov	#'0, R2
+20$:	cmp	R0, R1
+	blt	30$
+	sub	R1, R0
+	inc	R2
+	br	20$
+30$:	movb	R2, (R5)+
+	sob	R3, 10$
+	add	#'0, R0
+	movb	R0, (R5)
+	mov	(SP), R0
+	mov	2(SP), R5
+	call	PrintStr
+	cmp	(SP)+, (SP)+
+	return
+
+PrintDecimal2:
+	mov	R5, -(SP)
+	mov	#PrintDecA+3, -(SP)
+	mov	(SP), R5
+	mov	#PrintDecD+6., R4
+	mov	#1, R3
+	jmp	PrintDecimalX
+
+
+; draw sprite to screen-2 (with fbuf)
+; R1 - X (0..255), R2 - Y (0..255), R0 - sprite ID
+DrawSprite:
+	tst	PpuComm
+	bne	.-4
+	mov	R0, PpuCommR0
+	mov	R1, PpuCommR1
+	mov	R2, PpuCommR2
+	mov	#C_PPU_DRAWSPR, PpuComm
+	return 
+
+
+; same as draw sprite but with xor and immediately to screen 1
+XorSprite:
+	tst	PpuComm
+	bne	.-4
+	mov	R0, PpuCommR0
+	mov	R1, PpuCommR1
+	mov	R2, PpuCommR2
+	mov	#C_PPU_XORSPR, PpuComm
+	return
+
+
+; queue sprite
+; params as in DrawSprite
+QueueSprite:
+	tst	PpuComm
+	bne	.-4
+	mov	#C_PPU_DRAWSPR, PpuCommQue
+	mov	R0, PpuCommR0
+	mov	R1, PpuCommR1
+	mov	R2, PpuCommR2
+	mov	#C_PPU_QUEUECOM, PpuComm
+	return
+
+
+; queue framebuffer draw
+QueueFBDraw:
+	tst	PpuComm
+	bne	.-4
+	mov	#C_PPU_DRAWFBUF, PpuCommQue
+	mov	#C_PPU_QUEUECOM, PpuComm
+	return
+
+
+; queue framebuffer clear
+QueueFBClear:
+	tst	PpuComm
+	bne	.-4
+	mov	#C_PPU_CLEAFBUF, PpuCommQue
+	mov	#C_PPU_QUEUECOM, PpuComm
+	return
+
+
+; draw one block R5 - k-addr
+; do not modify R3, R4, R5 (!)
+; draw to screen-1
+DrawKTileR0:
+	mov	#C_VADDR1, DrawKTileBA+2
+	br	DrawKTileR0Go
+DrawKTile2:
+	mov	#C_VADDR2, DrawKTileBA+2
+	movb	LevelC(R5), R0	
+	bic	#^B1111111111000000, R0		; remove 'block power' bits
+DrawKTileR0Go:
+	swab	R0
+	asr	R0
+	asr	R0				; R0 = tile# * 64.
+	add	#TilesData, R0			; R0 = tile addr
+	; get vaddr from k-addr
+	mov	R5, R1
+	asl	R1
+	mov	KAddr2Vaddr(R1), R2		; vaddr without base
+DrawKTileBA:
+	add	#C_VADDR1, R2			; add base
+	; draw it
+	mov	#176640, R1
+	mov	R2, (R1)
+	mov	#176642, R2
+	.rept	16.
+	mov	(R0)+, (R2)
+	inc	(R1)
+	mov	(R0)+, (R2)
+	add	#C_SCRWID-1, (R1)
+	.endr
+	return
+
+
+; draw tile, R0 = tile #, R5 - vaddr
+DrawTile:
+	; also draw in PPU
+	tst	PpuComm
+	bne	.-4
+	mov	R0, PpuCommR0
+	mov	R5, PpuCommR1
+	mov	#C_PPU_DRAWTILE, PpuComm
+	; get source addr
+	swab	R0
+	clc
+	ror	R0
+	asr	R0				; R0 = tile# * 64.
+	add	#TilesData, R0			; R0 = tile addr
+	; output tile
+	mov	#176640, R4
+	mov	R5, (R4)			; set vaddr
+	mov	#176642, R5
+	mov	#C_SCRWID-1., R1
+	.rept	16.
+	mov	(R0)+, (R5)
+	inc	(R4)
+	mov	(R0)+, (R5)
+	add	R1, (R4)
+	.endr
+	return
+
+
+; bat draw
+DrawBat:
+	tst	BatDY
+	bhi	10$
+	return
+10$:	; get vaddr, queue draw command to PPU
+	mov	BatY, R1			; float Y
+	clrb	R1				; to .000
+	swab	R1
+	add	#C_FIELD_Y, R1
+	mul	#C_SCRWID, R1
+	add	#C_BATX_WORD+C_VADDR2, R1
+	tst	PpuComm
+	bne	.-4
+	mov	R1, PpuCommR0			; vaddr (screen 2)
+	mov	BatDY, PpuCommR3		; BatDY
+	mov	#C_PPU_DRAWBAT, PpuCommQue
+	mov	#C_PPU_QUEUECOM, PpuComm
+	; queue draw paralyzation
+	tst	BatPrz
+	beq	99$
+	mov	#C_BATX_PIX-4., R1
+	mov	BatY, R2			; Y float to Y pix
+	clrb	R2
+	swab	R2
+	sub	BatDY, R2
+	sub	#15., R2
+	mov	FrameCount, R0
+	bic	#^B1111111111110000, R0
+	asr	R0
+	asr	R0
+	movb	Spt020(R0), R0
+	add	#C_FIELD_Y, R2
+	call	QueueSprite
+99$:	return
+
+
+; boss bat draw
+DrawBossBat:
+	tstb	BossFight
+	beq	99$
+	tst	BatBossDY
+	ble	99$
+	; get vaddr, queue draw command to PPU
+	mov	BatBossY, R1			; float Y
+	clrb	R1				; to .000
+	swab	R1
+	add	#C_FIELD_Y, R1
+	mul	#C_SCRWID, R1
+	add	#C_BATBOSSX_WORD+C_VADDR2, R1
+	tst	PpuComm
+	bne	.-4
+	mov	R1, PpuCommR0
+	mov	BatBossDY, PpuCommR3
+	mov	#C_PPU_DRAWBAT, PpuCommQue
+	mov	#C_PPU_QUEUECOM, PpuComm
+99$:	return
+
+
+; Redraw background with header
+DrawBackground:
+	; is it dark level?
+	cmp	Level, #16.
+	beq	80$
+	; draw tiles
+	mov	#191., R5
+60$:	call	DrawKTile2
+	dec	R5
+	bpl	60$
+80$:	; print strings
+	mov	#STR013, R0	; print 'score'
+	mov	#C_FIELD_Y-16.*C_SCRWID+1.+C_VADDR2, R5
+	call	PrintStr
+	mov	#STR012, R0	; print 'level'
+	mov	#C_FIELD_Y-16.*C_SCRWID+15.+C_VADDR2, R5
+	call	PrintStr
+	mov	#47., R0	; 47. - small bat tile
+	mov	#C_FIELD_Y-18.*C_SCRWID+25.+C_VADDR2, R5
+	call	DrawTile
+	incb	ScoreChanged			; need draw score
+	incb	LivesChanged			; need draw lives
+	call	DuplicateScreen
+	return
+
+
+PrintOnOff:
+	tst	R0
+	bne	10$
+	mov	#Str010, R0
+	br	20$
+10$:	mov	#Str011, R0
+20$:	jmp	PrintStr
+
+
+PrintMenuPalette:
+	mov	Palette, R0
+	mov	#C_MENUY+15.*C_SCRWID+20.+C_VADDR1, R5
+	jmp	PrintDecimal2	
+
+
+PrintMenuSound:
+	mov	UseSound, R0
+	mov	#C_MENUY+40.*C_SCRWID+18.+C_VADDR1, R5
+	br	PrintOnOff
+
+
+PrintMenuCheat:
+	mov	UseCheat, R0
+	mov	#C_MENUY+65.*C_SCRWID+18.+C_VADDR1, R5
+	br	PrintOnOff
+
+
+MenuBallX:	.word	0
+MenuBallY:	.word	0
+MenuBallDir:	.byte	0
+MenuBallYIdx:	.byte	0
+MenuBallYTbl:	.byte	0., 0., 0., 1., 2., 3., 4., 5., 7., 8., 10., 12., 14., 16., 18., 20.
+		.byte	20., 18., 16., 14., 12., 10., 8., 7., 5., 4., 3., 2., 1., 0., 0., 0.
+
+MenuBallPrepare:
+	mov	#6.*8.+4., MenuBallX
+	mov	#C_SCROLL_Y-16.-20., MenuBallY
+	clr	MenuBallDir
+	return
+
+
+MenuBallProc:
+	; ball draw
+	mov	MenuBallX, R1
+	mov	MenuBallY, R2
+	movb	MenuBallYIdx, R0
+	movb	MenuBallYTbl(R0), R0
+	add	R0, R2
+	clr	R0
+	call	DrawSprite
+	mov	#C_PPU_DRAWFBUF, R5
+	call	PpuExecute
+	mov	#C_PPU_CLEAFBUF, R5
+	call	PpuExecute
+	; movements
+	tstb	MenuBallDir
+	bne	40$
+	inc	MenuBallX
+	cmp	MenuBallX, #24.*8.-4.
+	blo	50$
+	comb	MenuBallDir
+	br	50$
+40$:	sub	#2, MenuBallX
+	cmp	MenuBallX, #6.*8.+4.
+	bhi	50$
+	comb	MenuBallDir
+50$:	incb	MenuBallYIdx
+	bicb	#^B11100000, MenuBallYIdx
+	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Music
+; //////////////////////////////////////////////////////////////////////////////
+
+MusicDelay:	.word	0
+
+; R0 - song #, R1 - repeat
+MusicInit:
+	tst	PpuComm
+	bne	.-4
+	mov	R0, PpuCommR0
+	mov	R1, PpuCommR1
+	mov	#C_PPU_MUSINIT, PpuComm
+	clr	MusicDelay
+	return
+
+; call this every tick
+MusicPlay:
+	tst	MusicDelay
+	bmi	10$
+	dec	MusicDelay
+	return
+10$:	tst	PpuComm
+	bne	.-4
+	mov	#C_PPU_MUSPLAY, PpuComm
+	return
+
+MusicMute:
+	tst	PpuComm
+	bne	.-4
+	mov	#C_PPU_MUSMUTE, PpuComm
+	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Win animation related
+; //////////////////////////////////////////////////////////////////////////////
+
+; screen must be set to 5th
+
+StarsDelay:	.word	0
+StarsTTable:	.byte	67., 68., 69., 68., 67., 0
+
+; stars random
+; must be 1..255 without central square
+; (safe to use R4)
+StarsRandom:
+	call	Galois8bit
+	mov	R0, R4
+	bic	#^B1111111111110000, R4			; R4 - X
+	cmp	R4, #5.					; compare to boundaries
+	blos	10$
+	cmp	R4, #15.-5.
+	bhis	10$
+	br	StarsRandom
+10$:	mov	R0, R4
+	asr	R4
+	asr	R4
+	asr	R4
+	asr	R4					; R4 - Y
+	cmp	R4, #5.					;
+	blos	20$
+	cmp	R4, #15.-3.
+	bhis	20$
+	br	StarsRandom
+20$:	return
+
+; stars prepare, using level data as buffer for coords and idx-es
+; 6 'stars' with tiles #67, 68, 69
+StarsAnimPrep:
+	mov	#800., StarsDelay
+	mov	#LevelC, R5
+	clr	R1
+	mov	#6, R3
+10$:	call	StarsRandom				; R0 - 1..255
+	mov	R0, (R5)+				; KSaddr
+	mov	R1, (R5)+				; R1 - tile idx
+	inc	R1
+	sob	R3, 10$
+	return
+
+; 'stars' animation 
+StarsAnimTick:
+	; wait some for stars to start	
+	dec	StarsDelay
+	bpl	99$
+	clr	StarsDelay
+	bit	#^B111, FrameCount
+	bne	99$
+	mov	#LevelC, R2
+	mov	#6, R3
+10$:	mov	(R2)+, R0				; R0 - KSaddr
+	call	VramFromKSaddr
+	mov	R0, R5
+	add	#C_VADDR1, R5				; R5 - vaddr (screen 1)
+	mov	(R2), R0				; tile table index
+	inc	(R2)+					; increase it
+	movb	StarsTTable(R0), R0			; tile #
+	mov	R0, -(SP)
+	mov	R2, -(SP)
+	mov	R3, -(SP)	
+	call	DrawTile
+	mov	(SP)+, R3
+	mov	(SP)+, R2
+	mov	(SP)+, R0
+	bne	20$					; still have something to draw?
+	; set new 'star'
+	clr	-2(R2)					; clear index
+	call	StarsRandom
+	mov	R0, -4(R2)
+20$:	sob	R3, 10$
+99$:	return
+
+
+WinAnimAddr:	.word	0
+
+WinAnimTick:
+10$:	clr	R0
+	bisb	@WinAnimAddr, R0		; get command
+	inc	WinAnimAddr
+	; wait for vsync
+	cmpb	R0, #10.
+	bne	20$
+	return
+20$:	; loop
+	cmpb	R0, #11.
+	bne	30$
+	clr	R0
+	bisb	@WinAnimAddr, R0
+	inc	WinAnimAddr
+	swab	R0
+	bisb	@WinAnimAddr, R0
+	mov	R0, WinAnimAddr
+	br	10$
+30$:	; spr xor
+	clr	R1
+	bisb	@WinAnimAddr, R1		; X
+	inc	WinAnimAddr
+	clr	R2
+	bisb	@WinAnimAddr, R2		; Y
+	inc	WinAnimAddr
+	call	XorSprite			; xor sprite
+	br	10$
+
+; [spr#,x,y] or [10.-wait] or [11.,adrh,adrl-loop]
+; 
+C_ANYY = 160.
+C_ANYX = 84.
+
+.radix 10
+WinAnimData:	.byte	56,C_ANYX-16,C_ANYY, 55,C_ANYX,C_ANYY, 56,C_ANYX+16,C_ANYY, 54,C_ANYX+32,C_ANYY, 55,C_ANYX+48,C_ANYY, 56,C_ANYX+64,C_ANYY, 55,C_ANYX+80,C_ANYY
+		.byte	6,C_ANYX+10,C_ANYY+1			; pot #6 on
+		.byte	10
+
+		.byte	00, C_ANYX+86,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	00, C_ANYX+86,C_ANYY+1
+		.byte	27, C_ANYX+84,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	27, C_ANYX+84,C_ANYY+1
+		.byte	28, C_ANYX+82,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	28, C_ANYX+82,C_ANYY+1
+		.byte	29, C_ANYX+80,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	29, C_ANYX+80,C_ANYY+1
+		.byte	00, C_ANYX+78,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	00, C_ANYX+78,C_ANYY+1
+		.byte	27, C_ANYX+76,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	27, C_ANYX+76,C_ANYY+1
+		.byte	28, C_ANYX+74,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	28, C_ANYX+74,C_ANYY+1
+		.byte	29, C_ANYX+72,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	29, C_ANYX+72,C_ANYY+1
+		.byte	00, C_ANYX+70,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	00, C_ANYX+70,C_ANYY+1
+		.byte	27, C_ANYX+68,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	27, C_ANYX+68,C_ANYY+1
+		.byte	28, C_ANYX+66,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	28, C_ANYX+66,C_ANYY+1
+		.byte	29, C_ANYX+64,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	29, C_ANYX+64,C_ANYY+1
+		.byte	00, C_ANYX+62,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	00, C_ANYX+62,C_ANYY+1
+		.byte	27, C_ANYX+60,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	27, C_ANYX+60,C_ANYY+1
+		.byte	28, C_ANYX+58,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	28, C_ANYX+58,C_ANYY+1
+		.byte	29, C_ANYX+56,C_ANYY+1
+		.byte	10, 10, 10, 10
+		.byte	29, C_ANYX+56,C_ANYY+1
+		.byte	26, C_ANYX+56,C_ANYY+1
+
+		.byte	10
+;		.byte	16,C_ANYX+46,C_ANYY-12			; heart #16 on
+		.byte	10, 10, 10
+WinAniLoop:
+		.byte	6,C_ANYX+10,C_ANYY+1			; pot #6 off
+		.byte	7,C_ANYX+10,C_ANYY+1			; pot #7 on
+		.byte	10
+		.byte	10, 10, 10
+
+		.byte	7,C_ANYX+10,C_ANYY+1			; pot #7 off
+		.byte	8,C_ANYX+10,C_ANYY+1			; pot #8 on
+		.byte	10
+		.byte	16,C_ANYX+46,C_ANYY-12			; heart #16 off
+		.byte	17,C_ANYX+46,C_ANYY-12			; heart #17 on
+		.byte	10, 10, 10
+
+		.byte	8,C_ANYX+10,C_ANYY+1			; pot #8 off
+		.byte	9,C_ANYX+10,C_ANYY+1			; pot #9 on
+		.byte	10
+		.byte	10, 10, 10
+
+		.byte	9,C_ANYX+10,C_ANYY+1			; pot #9 off
+		.byte	6,C_ANYX+10,C_ANYY+1			; pot #6 on
+		.byte	10
+		.byte	17,C_ANYX+46,C_ANYY-12			; heart #17 off
+;		.byte	18,C_ANYX+46,C_ANYY-12			; heart #18 on
+		.byte	10, 10, 10
+
+		.byte	6,C_ANYX+10,C_ANYY+1			; pot #6 off
+		.byte	7,C_ANYX+10,C_ANYY+1			; pot #7 on
+		.byte	10
+		.byte	10, 10, 10
+
+		.byte	7,C_ANYX+10,C_ANYY+1			; pot #7 off
+		.byte	8,C_ANYX+10,C_ANYY+1			; pot #8 on
+		.byte	10
+		.byte	18,C_ANYX+46,C_ANYY-12			; heart #18 off
+		.byte	19,C_ANYX+46,C_ANYY-12			; heart #19 on
+		.byte	10, 10, 10
+
+		.byte	8,C_ANYX+10,C_ANYY+1			; pot #8 off
+		.byte	9,C_ANYX+10,C_ANYY+1			; pot #9 on
+		.byte	10
+		.byte	10, 10, 10
+
+		.byte	9,C_ANYX+10,C_ANYY+1			; pot #9 off
+		.byte	6,C_ANYX+10,C_ANYY+1			; pot #6 on
+		.byte	10
+		.byte	19,C_ANYX+46,C_ANYY-12			; heart #19 off
+;		.byte	16,C_ANYX+46,C_ANYY-12			; heart #16 on
+		.byte	10, 10, 10
+
+		.byte	11, WinAniLoop/256, WinAniLoop&255
+		.even
+.radix 8
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Logic
+; //////////////////////////////////////////////////////////////////////////////
+
+; addr of level to R0
+GetLevelAddr:
+	mov	Level, R0
+	asl	R0
+	mov	LevTbl(R0), R0
+	return
+
+
+; small introduction of level (if we have it)
+LevelIntro:
+	call	GetLevelAddr
+	tstb	-(R0)				; do we have level intro?
+	bne	99$
+	clr	R1
+10$:	inc	R1				; R1 = text length+1
+	tstb	-(R0)
+	bne	10$
+	inc	R0				; R0 = level text name addr
+	mov	#110.*C_SCRWID+16.+C_VADDR2, R5
+	asr	R1
+	sub	R1, R5
+	call	PrintStr
+	call	DuplicateScreen
+	; wait a bit
+	mov	#100., R0
+20$:	call	WaitVSync
+	sob	R0, 20$
+	call	ClearScreen
+99$:	return
+
+
+; load level, LEVEL - num
+LoadLevel:
+	; boss fight?
+	clrb	YouWin
+	clrb	BossFight
+	cmp	Level, #C_LEVEL_MAX
+	bne	10$
+	incb	BossFight
+10$:	; clear npc spawn pool, 14. npc's spawn pools
+	mov	#NPSPAT, R0
+	mov	#14., R3
+	clr	(R0)+
+	clr	(R0)+
+	clr	(R0)+
+	sob	R3, .-6
+	mov	#NPSPAT, NPSPAD
+	; clear current power-ups
+	mov	#PowerC, R0
+	mov	#16., R3
+	clr	(R0)+
+	sob	R3, .-2
+	mov	#PowerC, PowerCAddr
+	; unpack level
+	call	GetLevelAddr			; R0 - packed level addr
+	mov	#LevelC, R1
+	call	Unpack
+	; adjust unpacked level to field and put borders
+	call	ULevelAdj
+	; process levelC
+	clr	R5				; k-addr
+	mov	#0, R2				; y-block
+30$:	mov	#0, R1				; x-block
+31$:	clr	R0
+	bisb	LevelC(R5), R0
+	; npc generator
+	cmp	R0, #128.			; test for npc generator
+	blos	40$
+	bic	#^B11000000, R0
+	mov	R0, @NPSPAD			; type
+	add	#2, NPSPAD
+	mov	R1, @NPSPAD			; x-block addr
+	add	#2, NPSPAD
+	mov	R2, @NPSPAD			; y-block addr
+	add	#2, NPSPAD
+	clr	R0				; clear block
+	br	70$
+40$:	; power-ups
+	cmp	R0, #64.			; test for power-ups
+	blos	50$
+	bic	#^B11000000, R0
+	call	AddToPowerC
+	mov	#2, R0				; convert to block #2 for power-up
+50$:	; block power
+	movb	BGOPWR(R0), R3			; R3 <- power
+	swab	R3				; shift to upper 2-bits
+	asr	R3
+	asr	R3
+	bis	R3, R0
+70$:	movb	R0, LevelC(R5)			; write back
+	inc	R5
+	inc	R1
+	cmp	R1, #16.			; cycle by x
+	blo	31$
+	inc	R2
+	cmp	R2, #12.			; cycle by y
+	blo	30$	
+	; if we have Cheat
+	clrb	RightWall
+	tst	UseCheat
+	beq	80$
+	comb	RightWall
+	call	RWallCreate
+80$:	; set initial npc spawn addr
+	mov	#NPSPAT, NPSPAD
+	sub	#6, NPSPAD			; must be set 'before' first element
+	; clear kub effects
+	mov	#KeffCount, R0
+	mov	#KeffDataEnd-KeffCount/2, R3
+	clr	(R0)+
+	sob	R3, .-2
+	; set npc spawn speed at last levels
+	mov	#100, SpawnSpeed
+	cmp	Level, #17.
+	blo	99$
+	mov	#14., SpawnSpeed
+99$:	return
+
+
+; adjust unpacked 14x10 level field to 14x10 at center and draw borders
+ULevelAdj:
+	mov	#14.*10.+LevelC, R0		; end+1 of unpacked source
+	mov	#16.*12.+LevelC-17., R1		; end+1 of unpacked dest
+	mov	#10., R3
+10$:	mov	#14., R2
+	movb	-(R0), -(R1)
+	sob	R2, .-2
+	dec	R1
+	dec	R1
+	sob	R3, 10$
+	; left/right borders
+	mov	#LevWLeft, R0
+	mov	#16.+LevelC, R1
+	mov	#10., R3
+30$:	tstb	BossFight
+	bne	32$
+	movb	(R0)+, (R1)
+	br	34$
+32$:	clrb	(R1)
+34$:	clrb	15.(R1)
+	add	#16., R1
+	sob	R3, 30$
+	; top/bottom borders
+	mov	#LevWUpper, R0
+	mov	#LevWLower, R1
+	mov	#LevelC, R2
+	mov	#16., R3
+40$:	movb	(R0)+, (R2)+
+	movb	(R1)+, 16.*11.-1(R2)
+	sob	R3, 40$
+	return
+
+
+PowerCAddr:	.word	0
+
+; add to power-ups table
+; R0=power-up, R5=k-addr, PowerCAddr - current addr to add
+AddToPowerC:
+	mov	R0, @PowerCAddr
+	add	#2, PowerCAddr
+	mov	R5, @PowerCAddr
+	add	#2, PowerCAddr
+	return
+
+
+; right wall create
+RWallCreate:	
+	mov	#LevWLeft, R0
+	mov	#LevelC+16.+15., R4
+	mov	#10., R3
+10$:	movb	(R0)+, (R4)
+	add	#16., R4
+	sob	R3, 10$
+	return
+
+
+; default ball and bat coords and modes
+DefCoords:	
+	; bat
+	mov	#96.*256., BatY			; Y float
+	mov	#8., BatDY
+	mov	#2., BatMode			; glued from beginning mode
+	clr	BatSub				; submode
+	clr	BatPRZ				; paralyzation counter
+	call	BatVelInit			; init bat velocities
+	; boss bat
+	tstb	BossFight
+	beq	10$
+	mov	BatY, BatBossY
+	sub	#256., BatBossY			; correct a bit
+	mov	#8., BatBossDY
+10$:	; ball
+	mov	#60., BallAngle			; angle to the left and a bit down
+	mov	#C_BALLVEL_MIN, BallVel
+	mov	#12., BallBat			; position in a bat
+	call	BalGlu
+	clrb	BallSuper
+	clrb	BallSuperCnt
+	; other
+	clrb	LostCounter			; we are alive
+	return
+
+
+; draw score
+PrintScore:	
+	tstb	ScoreChanged			; do we need to redraw?
+	beq	99$
+	clrb	ScoreChanged
+	mov	Score, R0
+	mov	#16.*C_SCRWID+7.+C_VADDR1, R5
+	call	PrintDecimal5
+99$:	return
+
+
+; draw lvl & lives
+PrintLevel:
+	tstb	LivesChanged
+	beq	99$
+	clrb	LivesChanged
+	mov	Level, R0
+	mov	#16.*C_SCRWID+21.+C_VADDR1, R5
+	call	PrintDecimal2
+	mov	Lives, R0
+	mov	#16.*C_SCRWID+27.+C_VADDR1, R5
+	call	PrintDecimal2
+99$:	return
+
+
+; test for power-ups and convert block to power-up if ok
+PWRTST:	movb	LevelC(R5), R0
+	; quick check (only =2 block can have p-ups)
+	bic	#^B1111111111110000, R0
+	cmp	R0, #2.		
+	bne	99$
+	; normal check
+	mov	#PowerC, R0
+	mov	#8., R3				; max 8. power-ups
+10$:	mov	(R0)+, R1			; type
+	mov	(R0)+, R2			; p-ups k-addr
+	tst	R1
+	beq	20$
+	cmp	R2, R5				; p-ups k-addr == current k-addr ?
+	beq	30$
+20$:	sob	R3, 10$
+	br	99$
+30$:	; found p-ups, R1-type (type is usual block type)
+	bis	#^B01000000, R1			; set power to 1
+	movb	R1, LevelC(R5)			; write it back
+	sec					; converted
+	return
+99$:	clc					; not converted
+	return
+
+
+; hit power up? R5 - kaddr
+HITPWR:	movb	LevelC(R5), R0
+	bic	#^B1111111111100000, R0
+	; was it E p-up?
+	cmp	R0, #C_PWR_E
+	bne	10$
+	mov	#4., BatMode			; extend mode
+	return
+10$:	; was it G p-up?
+	cmp	R0, #C_PWR_G
+	bne	20$
+	mov	#5., BatMode			; wait for glued mode
+	return
+20$:	; was it bomb?
+	cmp	R0, #C_PWR_B
+	bne	30$
+	mov	#KeffTblDisso, R1		; dissolve seq addr
+	sub	#17., R5
+	clrb	LevelC(R5)
+	call	KeffAdd
+	inc	R5
+	clrb	LevelC(R5)
+	call	KeffAdd
+	inc	R5
+	clrb	LevelC(R5)
+	call	KeffAdd
+	add	#14., R5
+	clrb	LevelC(R5)
+	call	KeffAdd
+	inc	R5
+	inc	R5
+	clrb	LevelC(R5)
+	call	KeffAdd
+	add	#14., R5
+	clrb	LevelC(R5)
+	call	KeffAdd
+	inc	R5
+	clrb	LevelC(R5)
+	call	KeffAdd
+	inc	R5
+	clrb	LevelC(R5)
+	call	KeffAdd
+	sub	#17., R5			; rewind R5 to what is was before
+	return
+30$:	; was it super-ball?
+	cmp	R0, #C_PWR_S
+	bne	99$
+	incb	BallSuper
+99$:	return
+	
+	
+; process kub hit in field
+; NorKub - k-addr of hitted kub
+FieldHit:
+	tst	NorKub				; nothing hitted
+	beq	99$
+	tstb	LostCounter			; already lost
+	bne	99$
+	mov	NorKub, R5			; k-addr of hitted kub
+	tstb	BallSuper			; super-ball?
+	bne	30$				; always break kubs with super-ball
+	movb	LevelC(R5), R0
+	bic	#^B1111111100111111, R0		; break power
+	cmp	R0, #^B11000000			; unbreakable?
+	bne	20$
+	; hit unbreakable
+	incb	BallSuperCnt			; increase 'hit unbreakable' counter
+	cmpb	BallSuperCnt, #20.
+	blo	10$
+	incb	BallSuper			; set ball to super mode
+10$:	; add highlight effect
+	mov	#5, SoundNum			; sound 5 - 'ding'
+	mov	#KeffTblLight, R1		; h-light seq addr
+	br	90$
+20$:	; hit breakable
+	clrb	BallSuperCnt			; reset super-ball counter
+	sub	#^B01000000,R0			; decrease power
+	beq	30$				; block is broken?
+	movb	LevelC(R5), R1			; store back power
+	bic	#^B1111111111000000, R1
+	bis	R0, R1
+	movb	R1, LevelC(R5)
+	br	10$				; and go to highlight
+30$:	; broke something
+	; test for hidden power-up
+	call	PWRTST
+	bcc	32$
+	; add 'power up' effect
+	mov	#4, SoundNum			; sound 4 - 'ta da da'
+	mov	#KeffTblPower, R1		; power-up emerge seq addr
+	br	90$
+32$:	; add 'dissolve' effect
+	inc	Score
+	incb	ScoreChanged
+	call	HITPWR				; do we broke power up?
+	clrb	LevelC(R5)			; remove block
+	mov	#2, SoundNum			; sound 2 - 'tick'
+	mov	#KeffTblDisso, R1		; dissolve seq addr
+	; add effect from R1 on R5 (k-addr)
+90$:	call	KeffAdd
+99$:	return
+
+
+; add kub effect
+; R1 - seq addr, R5 - k-addr
+KeffAdd:
+	; search for an empty slot
+	; or for already used with k-addr
+	mov	#KeffData, R4
+10$:	mov	(R4), R0			; k-addr
+	beq	50$				; is it empty?
+	cmp	R0, R5				; maybe already used?
+	beq	60$				; replace then already used
+	add	#4., R4
+	cmp	R4, #KeffDataEnd
+	blo	10$
+	; TODO: alarm (!) not found - then what?
+	return
+50$:	; add kub effect
+	inc	KeffCount			; increase count of onscreen effects
+60$:	mov	R5, (R4)+			; k-addr
+	mov	R1, (R4)+			; seq-addr
+	return
+
+
+; process kub effects [k-addr] [sequence addr]
+KeffProcess:
+	mov	KeffCount, R3			; local counter
+	beq	99$				; do we need to process at all?
+	mov	#KeffData, R4			; R4 = addr of effects data start
+20$:	mov	(R4), R5			; k-addr
+	beq	50$				; if have nothing to do
+	dec	R3				; decrease local counter
+	movb	@2(R4), R0			; tile #
+	bne	30$				; if have tile
+	clr	(R4)				; else clear kub effect
+	dec	KeffCount			; and decrease counter of them
+	br	50$
+30$:	bpl	40$				; is it normal tile #
+	movb	LevelC(R5), R0			; else - restore from level
+	bic	#^B1111111111000000, R0		; remove 'power' bits
+40$:	call	DrawKTileR0			; draw tile #
+	inc	2(R4)				; increase sequence	
+50$:	tst	R3				; test local counter
+	beq	99$				; all was processed
+	add	#4., R4
+	cmp	R4, #KeffDataEnd		; also compare with end addr
+	blo	20$
+99$:	return
+
+
+; test for level end
+TestLevelEnd:
+	bit	#^B111111, FrameCount		; once in 64 frames
+	bne	99$
+	tstb	BossFight
+	bne	99$
+	; now check field
+	mov	#LevelC, R5
+	mov	#192., R3
+	mov	#^B1111111111000000, R1
+30$:	movb	(R5)+, R0
+	bic	R1, R0
+	beq	40$
+	cmpb	R0, #7.				; don't count unbreakable block
+	beq	40$
+	cmpb	R0, #10.
+	blo	99$
+40$:	sob	R3, 30$
+	mov	#C_MODE_LEVEND, CurrentMode	; next level prepare
+99$:	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // MODES
+; //////////////////////////////////////////////////////////////////////////////
+
+; lost mode processing
+LOSTDO:	tstb	LostCounter
+	beq	99$
+	incb	LostCounter
+	cmpb	LostCounter, #80.		; will wait some after ball is lost
+	blo	99$
+	mov	#C_MODE_LOST, CurrentMode	; live lost
+	dec	Lives
+	bpl	99$
+	mov	#C_MODE_OVER, CurrentMode	; game over
+99$:	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // BALL 
+; //////////////////////////////////////////////////////////////////////////////
+	
+BallX:		.byte	0, 20.			; floating point, high byte - integer part
+BallY:		.byte	0, 20.
+BallAngle:	.word	64.			; 0 .. 127
+BallVel:	.word	2.
+BallVelInc:	.word	0			; velocity increase count
+BallBat:	.word	12.			; relative y with bat
+
+; draw ball
+DrawBall:	
+	tstb	LostCounter
+	bne	99$
+	mov	BallX, R1			; they are float (!)
+	mov	BallY, R2
+	clrb	R1				; convert to 0..255
+	clrb	R2
+	swab	R1
+	swab	R2
+	clr	R0				; sprite # = 0 (normal ball)
+	tstb	BallSuper
+	beq	90$
+	inc	R0
+90$:	add	#C_FIELD_Y, R2
+	call	QueueSprite
+99$:	return
+
+
+; check for ball out
+BallCheckOut:	
+	mov	BallX, R0
+	cmp	R0, #240.*256.			; (float) 240.0 
+	blo	20$
+10$:	mov	#1., BatMode			; bat mode = 1 - delete bat
+	incb	LostCounter			; lost countdown
+	sec
+	return
+20$:	tstb	BossFight
+	beq	90$
+	cmp	R0, #4.*256.
+	bhi	90$
+	incb	YouWin
+	br	10$
+90$:	clc
+	return
+
+
+; process 'glued' ball
+BALGLU:	call	GLUTST
+	bcs	10$
+	return					; return with C=0
+10$:	mov	BatY, R0
+	clrb	R0
+	swab	R0
+	sub	BatDY, R0
+	sub	#12., R0			; -4 - 8(half ball dy)
+	add	BallBat, R0
+	swab	R0
+	mov	R0, BallY
+	mov	#C_BATX2BALLX, BallX
+	sec
+	return
+
+
+; ball moving
+BALMOV:	mov	BallAngle, Angle0
+	mov	BallVel, VELOCI
+	mov	BallX, ObjectX
+	mov	BallY, ObjectY
+	call	MOVTOB
+	mov	ObjectX, BallX
+	mov	ObjectY, BallY
+	mov	Angle0, BallAngle	
+	return
+
+
+; process ball
+BALLDO:	tstb	LostCounter
+	bne	99$
+	call	BallCheckOut
+	bcs	20$
+	call	BALGLU
+	bcs	20$
+	call	BALMOV				; move ball
+	call	FieldHit			; process field
+20$:	; bat deflection
+	mov	BallAngle, Angle0
+	call	ClrNor
+	call	BatCol
+	call	BatBossCol
+	call	AngCor
+	mov	Angle0, BallAngle
+99$:	return
+
+
+; ball vs npc check, NPCADR - current npc
+BallVsNpc:	
+	tstb	LostCounter			; already lost ball?
+	bne	90$
+	mov	NPCADR, R5			; R5 = current NPC data addr
+	mov	#10.*256., R0			; 10. (float)
+	; compare by X
+	mov	BallX, R1
+	mov	R1, R2
+	sub	R0, R1
+	add	R0, R2
+	mov	10(R5), R3
+	cmp	R3, R1
+	blo	90$
+	cmp	R3, R2
+	bhi	90$
+	; compare by Y	
+	mov	BallY, R1
+	mov	R1, R2
+	sub	R0, R1
+	add	R0, R2
+	mov	12(R5), R3
+	cmp	R3, R1
+	blo	90$
+	cmp	R3, R2
+	bhi	90$
+	; collided with npc
+	mov	#3, SoundNum			; sound = 3 (npc boom)
+	; bal is glued - dont change angle
+	call	GLUTST
+	bcs	70$
+	; npc #4. (rhombus) - always set ball angle to right (with a bit of random)
+	cmp	(R5), #4.
+	bne	60$
+	bit	#1, Lfsr00
+	beq	58$
+	mov	#4, BallAngle
+	br	70$
+58$:	mov	#125., BallAngle
+	br	70$
+60$:	; npc #7. (pot) - always change ball angle
+	cmp	(R5), #7.
+	beq	64$
+	; random ball angle
+	call	RND256
+	cmp	R0, #86.			; ~1/3 chance
+	bhis	70$
+64$:	call	RND256
+	asr	R0				; R0 <- 0..127
+	call	ANGFI2				; fixing some angles
+	mov	R0, BallAngle			; new ball angle
+70$:	mov	NPCADR, R5
+	mov	#255., 2(R5)			; state to 255 (dying)
+	clr	4(R5)				; clear substate
+	clr	14(R5)				; TODO: clear timers?
+	clr	16(R5)	
+	add	(R5), Score			; increase score
+	incb	ScoreChanged			; need to draw it
+	sec
+	return
+90$:	clc
+	return
+
+
+; increase ball velocity
+BALINC:	inc	BallVelInc
+	cmp	BallVelInc, #8.
+	blo	99$
+	clr	BallVelInc
+	cmp	BallVel, #C_BALLVEL_MAX
+	bhis	99$
+	inc	BallVel
+99$:	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // BAT 
+; //////////////////////////////////////////////////////////////////////////////
+
+BatY:		.word	96.*256.		; bat Y-coord (float pixels)
+BatDY:		.word	8.			; bat height (pixels)
+
+BatBossY:	.word	96.*256.
+BatBossDY:	.word	8.
+
+BatVel:		.word	1*256.			; velocity (float)
+BatDVel:	.word	64.			; velocity increase (float)
+
+BatPrz:		.word	0.			; bat paralization count
+BatMode:	.word	2.			; modes: 0 - no bat, 1 - lost
+						; 2 - glued from beginning 
+						; 3 - normal dy=8, 4 - normal dy=16
+						; 5 - prepare for glued, 6 - glued
+BatSub:		.word	0.			; submode
+BatDoT:		.word	0, BATDO1, BATDO2, BATDO3, BATDO4, BATDO5, BATDO6
+
+; bat lost
+BATDO1:	bit	#1., FrameCount		; every 2 frames
+	bne	9$
+	dec	BatBossDY
+	dec	BatDY
+	bne	9$
+	clr	BatMode
+9$:	return
+
+
+; glued from beginning
+BATDO2:	cmp	KeyCurrent, #C_KEY_SPACE	; awaiting press fire
+	bne	10$
+	clr	KeyCurrent
+	br	20$
+10$:	inc	BATSUB
+	cmp	BATSUB, #512.
+	blo	99$
+20$:	mov	#3., BatMode			; 3 - normal bat size
+	tstb	BossFight
+	beq	30$
+	inc	BatMode				; boss fight is in extended bat mode (4)
+30$:	clr	BATSUB
+	mov	#1., SoundNum
+99$:	return
+
+
+; normal 8 - shrink if larger
+BATDO3:	bit	#1., FrameCount
+	bne	99$
+	cmp	BATDY, #8.
+	blos	99$
+	dec	BATDY
+99$:	return	
+
+
+; normal 16 - enlarge if shorter
+BATDO4:	bit	#1., FrameCount
+	bne	99$
+	cmp	BATDY, #16.
+	bhis	99$
+	inc	BATDY
+99$:	return	
+
+
+; prepare to be glued - shrink it
+BATDO5:	call BATDO3
+	return
+
+
+; glued
+BATDO6:	cmp	KeyCurrent, #C_KEY_SPACE
+	bne	10$
+	clr	KeyCurrent
+	mov	#5., BatMode	; prepare to glued
+	clr	BATSUB
+	mov	#1., SoundNum
+	br	99$
+10$:	inc	BATSUB
+	cmp	BATSUB, #512.
+	blo	99$
+	clr	BATSUB
+	mov	#5., BatMode
+	mov	#1., SoundNum
+99$:	return
+
+
+; bat process
+BatDo:	tst	BatMode				; mode 0 - no bat at all
+	beq	99$
+	mov	BatMode, R0
+	asl	R0
+	call	@BATDOT(R0)
+	call	BatKeys
+	call	BatCorrect
+99$:	return
+
+
+; bat velocity & keys
+BatKeys:
+	tst	BatPrz				; was it paralyzed?
+	beq	10$
+	dec	BatPrz
+	return
+10$:	; keyboard actions
+	mov	KeyUp, R0
+	add	KeyDown, R0
+	beq	BatVelInit			; nothing pressed - reinit velocities
+50$:	; up
+	cmp	KeyCurrent, #C_KEY_UP
+	bne	60$
+	sub	BatVel, BatY
+	br	BatVelInc
+60$:	; down
+	cmp	KeyCurrent, #C_KEY_DOWN
+	bne	70$
+	add	BatVel, BatY
+	br	BatVelInc
+70$:	return
+
+
+; init bat velocities
+BatVelInit:
+	mov	#C_BATVEL_MIN, BatVel
+	mov	#C_BATDVEL_MIN, BatDVel
+	return
+
+
+; increase bat velocity
+BatVelInc:
+	add	BatDVel, BatVel
+	return
+
+
+; check & correct bat coords
+BatCorrect:
+	mov	BatDY, R1
+	swab	R1
+	mov	BatY, R0
+	sub	R1, R0
+	cmp	R0, #18.*256.
+	bhi	10$
+	mov	#18.*256., BatY
+	add	R1, BatY
+	br	BatVelInit
+10$:	mov	BatY, R0
+	add	R1, R0
+	cmp	R0, #173.*256.
+	blo	99$
+	mov	#173.*256., BatY
+	sub	R1, BatY
+	br	BatVelInit
+99$:	return
+
+
+; check collision with bat
+; input: R0,R5 - x,y of object (in pix)
+; R1, R2, R3, R4 - bat square (x1, x2, y1, y2)
+; return R0 - dy relative to bat top
+BatCheckInter:
+	; check X-coord
+	cmp	R0, R1
+	blo	99$
+	cmp	R0, R2
+	bhi	99$
+	; check Y-coord
+	cmp	R5, R3
+	blo	99$
+	cmp	R5, R4
+	bhi	99$
+	; collided
+	mov	R5, R0
+	sub	R3, R0
+	sec
+	return
+99$:	clc
+	return
+
+
+; bat vs ball collision processing
+BatCol:	tst	BatMode				; bat is lost?
+	beq	99$
+	call	GLUTST				; if glued - don't check
+	bcs	99$
+	; fast check bat collision
+	cmp	TempX, #C_BATX_PIX-12.
+	blo	99$
+	; continue with usual checks
+	mov	#C_BATX_PIX, R1
+	mov	R1, R2
+	add	#7., R2				; R1 = X1, R2 = X2
+	mov	BatY, R3
+	clrb	R3
+	swab	R3
+	mov	R3, R4
+	mov	BatDY, R5
+	add	#4, R5				; add some to bat length
+	sub	R5, R3
+	add	R5, R4				; R3 = Y1, R4 = Y2
+	; check 'going right' collision	
+	tstb	GoingRight
+	beq	10$
+	mov	TempX, R0
+	mov	TempY, R5
+	add	#12., R0
+	add	#8., R5
+	call	BatCheckInter
+	bcc	10$
+	; collided with left side
+	mov	R0, BallBat			; ball position in bat
+	cmp	BatDY, #8.			; size of bat - is it small?
+	bhi	6$
+	movb	BNorT1(R0), R0			; use bat normals without retraction
+	br	7$
+6$:	movb	BNorT2(R0), R0
+7$:	mov	R0, Angle0
+	call	BALINC				; increase ball velocity
+	cmp	BatMode, #5.			; was it prepare for glued?
+	bne	8$
+	mov	#6., BatMode			; set 'glued' if was
+	return
+8$:	mov	#1, SoundNum
+	return					; only one collision allowed
+10$:	; other bat sides check
+	; check up collision
+	tstb	GoingUp
+	beq	20$
+	mov	TempX, R0
+	mov	TempY, R5
+	add	#8., R0
+	add	#4., R5
+	call	BatCheckInter
+	bcc	20$
+	mov	#32., Normal			; 'down' normal
+	return
+	; check left collision
+20$:	tstb	GoingLeft
+	beq	30$
+	mov	TempX, R0
+	mov	TempY, R5
+	add	#2., R0
+	add	#8., R5
+	call	BatCheckInter
+	bcc	30$
+	clr	Normal				; -> normal
+	return
+	; check down collision
+30$:	tstb	GoingDown
+	beq	99$
+	mov	TempX, R0
+	mov	TempY, R5
+	add	#8., R0
+	add	#11., R5
+	call	BatCheckInter
+	bcc	99$
+	mov	#96., Normal			; 'up' normal
+99$:	return
+
+	
+; bat vs npc check, NPCADR - current npc
+BatVsNpc:
+	mov	NpcAdr, R5
+	; first check X < BatX-16., most time npc will be at left side of bat
+	cmp	10(R5), #C_BATX_PIX-16.*256.
+	blos	99$
+	cmp	10(R5), #C_BATX_PIX+8.*256.
+	bhis	99$
+20$:	; now compare Y
+	mov	BatDY, R1
+	swab	R1
+	mov	BatY, R0
+	sub	R1, R0
+	sub	#16.*256., R0			; bat top - 16. in float
+	cmp	12(R5), R0
+	blos	99$
+30$:	mov	BatY, R0
+	add	R1, R0
+	cmp	12(R5), R0
+	bhis	99$
+40$:	; collided
+	mov	#3, SoundNum			; sound = 3 (npc boom)
+	mov	#255., 2(R5)			; state to 255 (dying)
+	clr	4(R5)				; clear substate
+	clr	14(R5)				; clear timers
+	clr	16(R5)	
+	add	(R5), Score			; increase score
+	incb	ScoreChanged			; need to draw it
+	cmp	(R5), #C_NPC_BEE		; was it 'bee' npc?
+	bne	82$
+	mov	#500., BatPrz
+	br	90$
+82$:	cmp	(R5), #C_NPC_BOWL		; was it 'bowling' npc?
+	bne	90$
+	mov	#50., BatPrz
+90$:	sec
+	return
+99$:	clc
+	return
+
+
+; is ball glued to bat?
+GLUTST:	cmp	BatMode, #2.			; glued from start mode
+	beq	14$
+	cmp	BatMode, #6.			; just glued
+	beq	14$
+	clc
+	return
+14$:	sec	
+	return
+
+
+; boss bat procedure
+; homing on ball and that's all
+BatBossProc:
+	tstb	BossFight
+	beq	99$
+	; move after ball
+	mov	BallY, R0
+	add	#10.*256, R0			; R0 - ball (not) center (float)
+	sub	BatBossY, R0
+	asr	R0
+	asr	R0
+	asr	R0
+	add	R0, BatBossY
+	; correct boss bat coords
+	mov	BatBossDY, R1
+	swab	R1
+	mov	BatBossY, R0
+	sub	R1, R0
+	cmp	R0, #18.*256.
+	bhi	80$
+	mov	#18.*256., BatBossY
+	add	R1, BatBossY
+	br	99$
+80$:	mov	BatBossY, R0
+	add	R1, R0
+	cmp	R0, #173.*256.
+	blo	99$
+	mov	#173.*256., BatBossY
+	sub	R1, BatBossY
+99$:	return
+
+
+; ball vs boss bat collision
+BatBossCol:
+	tstb	BossFight
+	beq	99$
+	; fast check bat collision
+	cmp	TempX, #C_BATBOSSX_PIX+8.
+	bhi	99$
+	; continue with usual checks
+	mov	#C_BATBOSSX_PIX, R1
+	mov	R1, R2
+	add	#7., R2				; R1 = X1, R2 = X2
+	mov	BatBossY, R3
+	clrb	R3
+	swab	R3
+	mov	R3, R4
+	mov	BatBossDY, R5
+	add	#4, R5				; add some to bat length
+	sub	R5, R3
+	add	R5, R4				; R3 = Y1, R4 = Y2
+	; check 'going left' collision	
+	tstb	GoingLeft
+	beq	99$
+	mov	TempX, R0
+	mov	TempY, R5
+	add	#2., R0
+	add	#8., R5
+	call	BatCheckInter
+	bcc	99$
+	; collided with right side, R0 = position in bat
+	movb	BNorT3(R0), R0			; use bat normals without retraction
+	bic	#^B1111111110000000, R0	
+	mov	R0, Angle0
+	mov	#1, SoundNum
+99$:	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // MOVEMENT
+; //////////////////////////////////////////////////////////////////////////////	
+
+Angle0:		.word	0			; angle 0..127
+Veloci:		.word	0			; velocity 1..
+ObjectX:	.word	0			; left x coord
+ObjectY:	.word	0			; upper y coord
+
+GoingRight:	.byte	0			; (!) must be in that order (!) right, down, left, up
+GoingDown:	.byte	0
+GoingLeft:	.byte	0
+GoingUp:	.byte	0
+
+Normal:		.word	0			; reflection normal angle, negative - not reflected
+NorKub:		.word	0			; k-addr of hitted block
+
+
+; clear normals table (4 x 3 words)
+ClrNor:	clr	NorKub
+	mov	#-1, Normal
+	return
+
+
+; fix angles R0 = [0..127]
+; A in [A0..A1] = A2 etc
+ANGFIT:		.word	0.,2.,3., 125.,127.,124.
+		.word	30.,32.,29., 33.,35.,36.
+		.word	62.,64.,61., 65.,67.,68.
+		.word	94.,96.,93., 97.,99.,100.
+ANGFIE:
+
+
+; fix 'straight' angles to something different
+; .. or ball can stuck
+ANGFI2:	bic	#^B1111111110000000, R0		; fix angle to 0..127
+	mov	R5, -(SP)
+	mov	#ANGFIT, R5
+1$:	cmp	R5, #ANGFIE
+	bhis	99$
+	cmp	R0, (R5)
+	blo	10$
+	cmp	R0, 2(R5)
+	bhi	10$
+	mov	4(R5), R0
+	br	99$
+10$:	add	#6., R5
+	br	1$
+99$:	mov	(SP)+, R5
+	return
+
+
+; correcting Angle0 from Normal
+AngCor:	tst	Normal
+	bmi	99$
+	mov	Normal, R1
+	mov	Angle0, R0			; reverting angle
+	add	#64., R0
+	bic	#^B1111111110000000, R0		; fix angle to 0..127
+	asl	R1
+	sub	R0, R1
+	mov	R1, R0
+	bic	#^B1111111110000000, R0		; fix angle to 0..127
+	mov	R0, Angle0
+99$:	return
+
+
+; check where we are going (check angle)
+TstAng:	mov	Angle0, R0
+	asl	R0
+	asl	R0				; 4 bytes for angle
+	add	#AngToDirTbl, R0
+	mov	(R0)+, GoingRight		; right, down
+	mov	(R0)+, GoingLeft		; left, up
+	return
+
+
+; movement 01 - move by angle & velocity
+; input: ObjectX, ObjectY
+; -> TempX, TempY - coords (not float)
+; -> Z=1 - not moved in pixels
+Movt01:	mov	Angle0, R0
+	asl	R0
+	add	#TBAlph, R0
+	movb	(R0)+, R1			; DX
+	movb	(R0)+, R2			; DY
+	mov	Veloci, R3
+	; store prev [Y X] (pix) word for checking was it changed
+	mov	ObjectX, R4
+	clrb	R4
+	mov	ObjectY, R0
+	clrb	R0
+	swab	R0
+	add	R0, R4				; R4 - [X Y] word (pix) old
+	; moving in cycle by velocity
+10$:	add	R1, ObjectX
+	add	R2, ObjectY
+	sob	R3, 10$
+	; store coords in pix to TempX, TempY
+	mov	ObjectX, R1
+	clrb	R1
+	mov	R1, R0				; R0 = X (pix) upper byte
+	swab	R1
+	mov	R1, TempX
+	mov	ObjectY, R2
+	clrb	R2
+	swab	R2				; R2 = Y (pix) lower byte
+	mov	R2, TempY
+	add	R2, R0				; R0 = [X Y] word (pix) new
+	cmp	R0, R4
+	return
+
+
+; movement 02 - add wall's normals
+; input: R1 - X, R2 - Y (in pix) (must be already set from Movt01)
+; outpu: set Normal if collided
+Movt02:	tstb	RightWall			; do we have right wall
+	beq	20$
+	tstb	GoingRight			; testing right wall
+	beq	20$
+	cmp	R1, #228.
+	blo	20$
+	mov	#64., Normal			; left normal angle
+	return
+20$:	tstb	GoingUp				; testing top wall
+	beq	30$
+	cmp	R2, #11.
+	bhi	30$
+	mov	#32., Normal			; down normal angle
+	return
+30$:	tstb	GoingDown			; testing bottom wall
+	beq	40$
+	cmp	R2, #164.
+	blo	40$
+	mov	#96., Normal			; up normal angle
+	return
+40$:	tstb	GoingLeft			; testing left wall
+	beq	50$
+	tstb	BossFight
+	bne	50$
+	cmp	R1, #11.
+	bhi	50$
+	clr	Normal				; right normal angle
+50$:	return 
+
+
+; movement 03 - field collision normals
+; TEMPX, TEMPY - obj coords
+; if collided - NORKUB=k-addr, NORMAL=reflecting normal angle
+
+MovtXcnum:	.byte	0
+MovtYcnum:	.byte	0
+
+MovtXkaddr:	.word	0			; k-addr of preferable collided kub
+MovtXnormal:	.word	0			; normal angle
+MovtXdist:	.word	0			; (temp) min distance of points to center by Y
+
+MovtYkaddr:	.word	0
+MovtYnormal:	.word	0
+MovtYdist:	.word	0
+
+; check collision with field by X
+; R1, R2 - X, Y
+MovtXcheck:
+	asr	R1				; converting x,y -> k-addr
+	asr	R1
+	asr	R1
+	asr	R1
+	mov	R2, R0
+	bic	#^B1111, R0			; R0 = Y/16 * 16
+	add	R1, R0				; R0 = R0 + X/16 = k-addr
+	clr	R1
+	bisb	LevelC(R0), R1			; R1 - block byte
+	beq	99$				; empty cell - not colliding
+	bit	#^B11000000, R1
+	beq	99$				; blocks without 'power' - not colliding
+	; collided
+	incb	MovtXcnum			; increase collisions #
+	bic	#^B1111111111110000, R2		; must use closest (by Y)
+	sub	#8., R2				; to center of 0..16
+	bge	10$				; it's for filtration when we are colliding with two blocks simult-ly
+	neg	R2
+10$:	cmp	R2, MovtXdist			; compare with current 'close to center'
+	bge	99$
+	mov	R2, MovtXdist			; sets collided block 'close to center' and k-addr
+	mov	R0, MovtXkaddr
+99$:	return 
+
+
+; check collision with field by Y
+; R1, R2 - X, Y
+MovtYcheck:
+	mov	R1, R0
+	asr	R0
+	asr	R0
+	asr	R0
+	asr	R0
+	bic	#^B1111, R2
+	add	R2, R0				; R0 = k-addr
+	clr	R2
+	bisb	LevelC(R0), R2
+	beq	99$
+	bit	#^B11000000, R2
+	beq	99$
+	; collided
+	incb	MovtYcnum
+	bic	#^B1111111111110000, R1
+	sub	#8., R1
+	bge	10$
+	neg	R1
+10$:	cmp	R1, MovtYdist
+	bge	99$
+	mov	R1, MovtYdist
+	mov	R0, MovtYkaddr
+99$:	return 
+
+; 00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15
+;          [                           ]
+
+; movement 03 - collision with field checks
+Movt03:	clr	MovtXcnum			; clear both X and Y collision numbers
+	mov	TempX, R4
+	mov	TempY, R5
+	; movement by X
+	mov	#77, MovtXdist			; (temp) distance to center
+	tstb	GoingRight			; are we going right?
+	beq	10$
+	clr	MovtXnormal			; normal angle for X, use right 
+	mov	R4, R1				; X
+	mov	R5, R2				; Y
+	add	#12., R1			; adjust to a point
+	add	#03., R2
+	call	MovtXcheck
+	mov	R4, R1
+	mov	R5, R2
+	add	#12., R1
+	add	#12., R2
+	call	MovtXcheck
+	br	20$
+10$:	tstb	GoingLeft
+	beq	20$
+	clr	MovtXnormal			; normal angle for X, also use right
+	mov	R4, R1
+	mov	R5, R2
+	add	#03., R1
+	add	#03., R2
+	call	MovtXcheck
+	mov	R4, R1
+	mov	R5, R2
+	add	#3., R1
+	add	#12., R2
+	call	MovtXcheck
+20$:	; movement by Y
+	mov	#77, MovtYdist
+	tstb	GoingDown
+	beq	30$
+	mov	#32., MovtYnormal		; normal angle for Y, use down
+	mov	R4, R1
+	mov	R5, R2
+	add	#03., R1
+	add	#12., R2
+	call	MovtYcheck
+	mov	R4, R1
+	mov	R5, R2
+	add	#12., R1
+	add	#12., R2
+	call	MovtYcheck
+	br	40$
+30$:	tstb	GoingUp
+	beq	40$
+	mov	#32., MovtYnormal		; normal angle for Y, also use down
+	mov	R4, R1
+	mov	R5, R2
+	add	#03., R1
+	add	#03., R2
+	call	MovtYcheck
+	mov	R4, R1
+	mov	R5, R2
+	add	#12., R1
+	add	#03., R2
+	call	MovtYcheck
+40$:	; analyze
+	tst	MovtXcnum			; collided at all?
+	beq	99$
+	cmpb	MovtXcnum, MovtYcnum		; check what normal to use
+	blo	60$
+	bhi	50$
+	; equal - must decide which is better...
+	cmp	MovtXdist, MovtYdist
+	bhi	60$
+50$:	; use X normal and k-addr
+	mov	MovtXnormal, Normal
+	mov	MovtXkaddr, NorKub
+	return
+60$:	; use Y normal and k-addr
+	mov	MovtYnormal, Normal
+	mov	MovtYkaddr, NorKub
+99$:	return
+
+
+; angle to the ball (romb npc is homing on ball)
+ANGONB:	mov	BallX, R1
+	mov	BallY, R2
+	clrb	R1
+	clrb	R2
+	swab	R1
+	swab	R2
+	mov	ObjectX, R3
+	mov	ObjectY, R4
+	clrb	R3
+	clrb	R4
+	swab	R3
+	swab	R4
+	cmp	R2, R4
+	blos	10$
+	; ball is down
+	cmp	R1, R3
+	blos	5$
+	mov	#16., R0
+	return
+5$:	mov	#48., R0
+	return
+10$:	; ball is up
+	cmp	R1, R3
+	blos	15$
+	mov	#112., R0
+	return
+15$:	mov	#80., R0
+	return
+
+
+; movement summary
+MOVTOB:	call	Movt01				; move by angle
+	beq	99$				; wasn't moved in pixels
+	call	TstAng				; update angle direction
+	call	ClrNor				; clr normal
+	call	Movt02				; add walls normal
+	call	AngCor				; correct angle (if have normal)
+	call	ClrNor				; clr normal
+	call	Movt03				; add field normal
+	call	AngCor				; correct angle (if have normal)
+99$:	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // NPC
+; //////////////////////////////////////////////////////////////////////////////
+	
+; clear NPC objects
+ClearNpc:
+	mov	#NpcTbl, R5
+10$:	clr	(R5)+
+	cmp	R5, #NpcTbe
+	blo	10$
+	return
+
+
+; make commands to draw npc objects
+; NPC object: type, state, substate, spr id, x, y, timer1, timer2, data1, data2
+DrawNpc:	
+	; clear NPCs counts
+	mov	#NpcCnt, R0
+	mov	#C_MAX_NPCNUM/2, R3
+	clr	(R0)+
+	sob	R3, .-2
+	; draw them
+	mov	#NPCTBL, NpcAdr
+1$:	mov	NpcAdr, R5
+	tst	(R5)
+	beq	99$
+	mov	(R5), R1			; R1 <- npc type
+	incb	NpcCnt(R1)			; increase this type's count
+	;
+	add	#6, R5
+	mov	(R5)+, R0			; R0 <- spr ID
+	mov	(R5)+, R1			; X (float)
+	clrb	R1				; change to pix
+	swab	R1
+	mov	(R5)+, R2			; Y (float)
+	clrb	R2				; change to pix
+	swab	R2
+	;
+	add	#C_FIELD_Y, R2
+	call	QueueSprite
+	;
+99$:	add	#20., NPCADR
+	cmp	NPCADR, #NPCTBE
+	blo	1$ 
+	return
+
+
+NPCSP0:	.word	345.				; spawn timer
+
+; npc spawn procedure
+NPCSPA:	add	#6, NPSPAD			; cycle spawn points
+	tst	@NPSPAD
+	bne	1$
+	mov	#NPSPAT, NPSPAD
+1$:	dec	NPCSP0
+	beq	10$
+	return
+10$:	call	RND256				; random timer again
+	asr	R0
+	add	SpawnSpeed, R0			; some delay
+	mov	R0, NPCSP0
+	mov	@NPSPAD, R4
+	add	#2, NPSPAD
+	mov	@NPSPAD, R1
+	add	#2, NPSPAD
+	mov	@NPSPAD, R2
+	mov	#NPSPAT, NPSPAD			; again to before spawn pool
+	sub	#6, NPSPAD
+	; check max spawning count
+	mov	R4, R0
+	movb	NpcCnm(R0), R5			; max npc num on screen
+	movb	NpcCnt(R0), R0			; current npx num on screen
+	cmp	R0, R5
+	blt	12$
+	return
+	; now spawn, R4 - type, R1 - x block, R2 - y block
+12$:	mov	#NPCTBL, NPCADR
+14$:	mov	NPCADR, R5
+	tst	(R5)
+	bne	20$
+	mov	R4, (R5)+			; 00 type
+	clr	(R5)+				; 02 state = 0 (emerging)
+	clr	(R5)+				; 04 substate = 0
+	mov	#2, (R5)+			; 06 spr id = 2 (emerging)
+	mov	R1, R0
+	asl	R0
+	asl	R0
+	asl	R0
+	asl	R0				; x-block to x-pix
+	swab	R0				; to float
+	mov	R0, (R5)+			; 10 x (floating)
+	mov	R2, R0
+	asl	R0
+	asl	R0
+	asl	R0
+	asl	R0
+	swab	R0
+	mov	R0, (R5)+			; 12 y (floating)
+	clr	(R5)+				; 14 timer 1
+	clr	(R5)+				; 16 timer 2
+	call	Rnd256
+	asr	R0				; 0..127
+	mov	R0, (R5)+			; 20 data 1 (usually angle)
+	clr	(R5)+				; 22 data 2
+	return
+20$:	add	#20., NPCADR
+	cmp	NPCADR, #NPCTBE
+	blo	14$
+99$:	return
+
+
+; state 0 - emerging
+NpdEme:	mov	NpcAdr, R5
+	mov	4(R5), R2			; substate - spr # in 'emerging' seq table
+	movb	Spt000(R2), 6(R5)		; spr #
+	inc	14(R5)				; timer 1
+	bic	#^B1111111111111000, 14(R5)	; 0..7 ticks
+	bne	99$				; if timer 1 = 0 then
+	inc	4(R5)				; increase substate (spr seq num)
+	bic	#^B1111111111111100, 4(R5)	; 0..3 spr seq
+	bne	99$
+	inc	2(R5)				; change state to 1 (alive)
+99$:	return
+
+
+; state 255. - dying
+NpdDyi:	mov	NpcAdr, R5
+	mov	4(R5), R2			; substate - spr # in 'dying' seq table
+	movb	Spt255(R2), 6(R5)		; spr #
+	inc	14(R5)				; timer 1
+	bic	#^B1111111111111100, 14(R5)	; 0..3 ticks
+	bne	99$
+	inc	4(R5)
+	bic	#^B1111111111111100, 4(R5)	; 0..3 spr seq
+	bne	99$
+	clr	(R5)				; clear NPC
+99$:	return
+
+	
+; 'empty' npc
+Npd000:	return
+
+
+; simple 'face' npc
+Npd001:	mov	NpcAdr, R5			; current NPC data address
+	mov	4(R5), R2			; substate - # in spr table seq
+	movb	Spt001(R2), 6(R5)		; set sprite #
+	; timer 1
+	inc	14(R5)				; timer 1
+	bic	#^B1111111111110000, 14(R5)
+	bne	30$
+	inc	4(R5)				; increase substate (spr seq num)
+	bic	#^B1111111111111000, 4(R5)
+30$:	; timer 2
+	dec	16(R5)				; timer 2 - change angle to random
+	bpl	40$
+	mov	#180., 16(R5)
+	call	Rnd256
+	asr	R0				; 0..127
+	mov	R0, 20(R5)			; change angle to random
+40$:	; movement
+	mov	10(R5), ObjectX
+	mov	12(R5), ObjectY
+	mov	20(R5), Angle0
+	mov	#1, Veloci
+	call	MOVTOB
+	mov	NpcAdr, R5
+	mov	ObjectX, 10(R5)
+	mov	ObjectY, 12(R5)
+	mov	Angle0, 20(R5)
+	return 
+
+
+; launch 'bee'
+BeeAdd:	mov	#NPCTBL, R0
+10$:	tst	(R0)
+	bne	20$
+	mov	#C_NPC_BEE, (R0)+		; type = 3 (bee)
+	clr	(R0)+				; state = 0 (emerging)
+	clr	(R0)+				; substate = 0
+	mov	#2, (R0)+			; spr id
+	mov	ObjectX, (R0)			; x (floating)
+	add	#17.*256., (R0)+		; put bee in front of bee hive
+	mov	ObjectY, (R0)+			; y (floating)
+	clr	(R0)+				; timer 1
+	clr	(R0)+				; timer 2
+	clr	(R0)+				; data 1
+	clr	(R0)+				; data 2
+	return
+20$:	add	#20., R0
+	cmp	R0, #NPCTBE
+	blo	10$
+	return	
+
+
+; 'hive' npc - only one allowed on field
+Npd002:	mov	NpcAdr, R5
+	mov	FrameCount, R2
+	bic	#^B1111111111110011, R2
+	asr	R2
+	asr	R2
+	movb	Spt002(R2), 6(R5)		; update spr #
+	; timer 1
+	inc	14(R5)				; timer 1 - spawn bee
+	cmp	14(R5), #300.
+	blo	20$
+	clr	14(R5)
+	cmp	10(R5), #200.*256.		; check if we can actually launch it
+	bhi	20$
+	mov	10(R5), ObjectX
+	mov	12(R5), ObjectY
+	call	BeeAdd
+20$:	; timer 2
+	inc	16(R5)				; timer 2 - change angle to random
+	cmp	16(R5), #200.
+	blo	40$
+	clr	16(R5)
+	call	RND256
+	asr	R0				; 0..127
+	mov	R0, 20(R5)			; change angle to random
+40$:	; movement
+	mov	10(R5), ObjectX
+	mov	12(R5), ObjectY
+	mov	20(R5), Angle0
+	mov	#1, Veloci
+	call	MOVTOB
+	mov	NpcAdr, R5
+	mov	ObjectX, 10(R5)
+	mov	ObjectY, 12(R5)
+	mov	Angle0, 20(R5)
+	return 
+
+
+; 'bee' npc
+Npd003:	mov	NpcAdr, R5
+	mov	4(R5), R2			; substate
+	movb	Spt003(R2), 6(R5)		; update sprite #
+	bit	#^B11, FrameCount		; increase substate once in 4 frames
+	bne	10$
+	inc	4(R5)
+	bic	#^B1111111111111110, 4(R5)	; substate only 0..1
+10$:	add	#256., 10(R5)			; increase X (float)
+	return
+
+
+; 'romb' npc
+Npd004:	mov	NpcAdr, R5
+	mov	4(R5), R2			; substate - # in spr table seq
+	movb	Spt004(R2), 6(R5)		; set sprite #
+	inc	14(R5)				; timer 1
+	bic	#^B1111111111111100, 14(R5)
+	bne	30$
+	inc	4(R5)				; increase substate (spr seq num)
+	cmp	4(R5), #6.			; 0..5 seq
+	blo	30$
+	clr	4(R5)
+30$:	; timer 2 - change direction to the ball
+	inc	16(R5)				; timer 2
+	cmp	16(R5), #40.
+	blo	40$
+	clr	16(R5)
+	mov	10(R5), ObjectX
+	mov	12(R5), ObjectY
+	call	ANGONB
+	mov	R0, 20(R5)			; change angle to ball
+40$:	; movement - must go to the ball
+	mov	10(R5), ObjectX
+	mov	12(R5), ObjectY
+	mov	20(R5), Angle0
+	mov	#2, VELOCI
+	call	MOVTOB
+	mov	NPCADR, R5
+	mov	ObjectX, 10(R5)
+	mov	ObjectY, 12(R5)
+	mov	Angle0, 20(R5)
+	return 
+
+
+; 'bowling' npc
+NPD005:	mov	NpcAdr, R5
+	mov	#Spt005, R0
+	call	N4Frame
+	; timer 2 - change angle to the bat
+	inc	16(R5)				; timer 2
+	cmp	16(R5), #20.
+	blo	40$
+	clr	16(R5)
+	; movement - set new angle
+	mov	12(R5), R0
+	add	#8.*256., R0
+	cmp	BatY, R0
+	bhi	28$
+	mov	#116., 20(R5)
+	br	40$
+28$:	mov	#16., 20(R5)
+40$:	; movement
+	mov	10(R5), ObjectX
+	mov	12(R5), ObjectY
+	mov	20(R5), Angle0
+	mov	#4., VELOCI
+	call	MOVTOB
+	mov	NPCADR, R5
+	mov	ObjectX, 10(R5)
+	mov	ObjectY, 12(R5)
+	mov	Angle0, 20(R5)
+	return 
+
+
+; 'npc bat'
+NPD006:	mov	NpcAdr, R5
+	mov	#Spt006, R0
+	call	N4Frame
+	; timer 2
+	inc	16(R5)				; timer 2
+	cmp	16(R5), #200.
+	blo	40$
+	clr	16(R5)
+	call	RND256
+	asr	R0				; 0..127
+	mov	R0, 20(R5)			; change angle to random
+40$:	; movement
+	mov	10(R5), ObjectX
+	mov	12(R5), ObjectY
+	mov	20(R5), Angle0
+	mov	#2, VELOCI
+	call	CLRNOR
+	call	MOVTOB
+	mov	NPCADR, R5
+	mov	ObjectX, 10(R5)
+	mov	ObjectY, 12(R5)
+	mov	Angle0, 20(R5)
+	call	FieldHit
+	mov	NpcAdr, R5			; r5 was broken in fieldhit
+	return 
+
+
+; 'pot'
+NPD007:	mov	NpcAdr, R5
+	mov	#Spt007, R0
+	call	N4Frame
+40$:	; movement
+	add	#256., 12(R5)			; increase Y
+	; check if hit anything
+	mov	10(R5), R0
+	clrb	R0
+	swab	R0
+	asr	R0
+	asr	R0
+	asr	R0
+	asr	R0
+	mov	12(R5), R1
+	clrb	R1
+	swab	R1
+	add	#14., R1			; point to bottom
+	bic	#^B1111, R1
+	add	R1, R0				; R0 = k-addr
+	tstb	LevelC(R0)
+	beq	99$
+	mov	#3, SoundNum			; sound = 3 (npc boom)
+	mov	#255., 2(R5)			; state to 255. (boom)
+	clr	4(R5)				; clear substate
+	clr	14(R5)				; clear timer 1
+	; remove block if its not last line
+	cmp	R0, #11.*16.
+	bhis	99$
+	mov	R0, R5
+	mov	#KeffTblDisso, R1		; dissolve seq addr
+	clrb	LevelC(R5)
+	call	KeffAdd
+	mov	NpcAdr, R5			; restore R5 just in case
+99$:	return 
+
+
+; set 4-frame sprite id
+; R5 - npcadr, R0 - 4-spr tbl
+N4Frame:
+	bit	#^B11, FrameCount
+	bne	99$
+	mov	4(R5), R2			; substate
+	bic	#^B1111111111111100, R2
+	add	R0, R2				; add spr tbl
+	movb	(R2), 6(R5)			; spr id
+	inc	4(R5)				; substate++
+99$:	return
+
+
+; npc vs npc collision check
+; R5 - current npc data addr, PrevNpcAddr - previous
+NpcVsNpc:
+	mov	PrevNpcAddr, R4
+	mov	#10.*256., R0			; 10. (float)
+	; compare by X
+	mov	10(R4), R1
+	mov	R1, R2
+	sub	R0, R1
+	add	R0, R2
+	mov	10(R5), R3
+	cmp	R3, R1
+	blo	90$
+	cmp	R3, R2
+	bhi	90$
+	; compare by Y	
+	mov	12(R4), R1
+	mov	R1, R2
+	sub	R0, R1
+	add	R0, R2
+	mov	12(R5), R3
+	cmp	R3, R1
+	blo	90$
+	cmp	R3, R2
+	bhi	90$
+	; collided
+	mov	#3, SoundNum			; sound = 3 (npc boom)
+	mov	#255., 2(R4)			; state to 255., boom
+	mov	#255., 2(R5)
+	clr	4(R4)				; clear substate
+	clr	14(R4)				; clear timer 1
+	clr	4(R5)
+	clr	14(R5)
+90$:	return
+
+
+; npc process routines table
+NpdTBL:		.word	NPD000, NPD001, NPD002, NPD003, NPD004, NPD005, NPD006, NPD007, 0, 0
+
+PrevNpcAddr:	.word	0
+
+; npc process
+NPCDO:	mov	#NPCTBL, NPCADR
+	clr	PrevNpcAddr
+10$:	; common for all npcs
+	mov	NPCADR, R5
+	tst	(R5)
+	beq	90$
+	mov	2(R5), R1			; state
+	bne	11$
+	call	NPDEME				; 0 - emerging
+	br	90$
+11$:	cmp	#255., R1			; 255 - ka-boom
+	bne	12$
+	call	NPDDYI
+	br	90$
+12$:	; test ball and bat collision
+	call	BallVsNpc
+	bcs	90$
+	call	BatVsNpc
+	bcs	90$
+	; each npc use own procedure
+	mov	@NPCADR, R0			; npc type
+	asl	R0
+	mov	NPDTBL(R0), R0
+	beq	90$				; not implemented npc
+	call	(R0)
+	; check for 'out of field', R5 here must be set to NpcAdr (!)
+	cmp	10(R5), #239.*256.		; x >= 239 * 256? (coords are float!)
+	blo	20$
+	clr	(R5)				; clear NPC type
+	br	90$
+20$:	; check collision with previous npc (if any)
+	tst	PrevNpcAddr
+	beq	30$
+	call	NpcVsNpc
+30$:	mov	R5, PrevNpcAddr
+90$:	add	#20., NPCADR
+	cmp	NPCADR, #NPCTBE
+	blo	10$
+	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Utils to be not in 0..40000
+; //////////////////////////////////////////////////////////////////////////////
+
+; ZX0 v2.2 standart unpacker
+; original ZX0 encoder/decoder (c) Einar Saukas & Urusergi
+; PDP11 version by reddie, 02-may-2024 (upd)
+; usage:
+; R0 = source data addr (compressed)
+; R1 = addr for decompressing data
+; out:
+; R0 = next byte after the source data
+; R1 = next byte after the decompressed data
+Unpack:
+	clr	R2
+	movb	#200, R3
+	sxt	R5
+10$:	call	50$
+	movb	(R0)+, (R1)+
+	sob	R2, .-2
+	aslb	R3
+	bcs	30$
+	call	50$
+20$:	mov	R1, R4
+	add	R5, R4
+	movb	(R4)+, (R1)+
+	sob	R2, .-2
+	aslb	R3
+	bcc	10$
+30$:	mov	#-2, R2
+	call	60$
+	incb	R2
+	bne	.+4
+40$:	return
+	swab	R2
+	mov	R2, R5
+	clrb	R5
+	bisb	(R0)+, R5
+	asr	R5
+	mov	#1, R2
+	bcs	.+6
+	call	80$
+	inc	R2
+	br	20$
+50$:	incb	R2
+60$:	aslb	R3
+	bne	70$
+	movb	(R0)+, R3
+	rolb	R3
+70$:	bcs	40$
+80$:	aslb	R3
+	rol	R2
+	br	60$
+
+
+; create K-addrs to vaddrs table
+FillKVAddrs:
+	clr	R5
+	mov	#KAddr2Vaddr, R4
+10$:	; get vaddr for R5 - k-addr
+	mov	R5, R2
+	bic	#^B1111111111110000, R2
+	asl	R2				; R2 = X/16 * 2 (2 units) offset
+	mov	R5, R1
+	bic	#^B0000000000001111, R1		; R1 = Y*16
+	mul	#C_SCRWID, R1			; R1 = Y*16*C_SCRWID
+	add	R2, R1
+	add	#C_FIELD_Y*C_SCRWID, R1		; R1 = Vaddr (without base)
+	; store it
+	mov	R1, (R4)+
+	inc	R5
+	cmp	R5, #192.
+	blo	10$
+	return
+
+; create angle -> directions table
+FillAngToDir:
+	; clear table just in case
+	mov	#AngToDirTbl, R0
+	mov	R0, R5
+	mov	#64., R3			; 128. bytes table
+	clr	(R0)+
+	sob	R3, .-2
+	; now fill it
+	clr	R0				; R0 - angle (R5 - table)
+10$:	; check going right
+	cmp	R0, #32.
+	bhis	12$
+	incb	(R5)
+	br	20$
+12$:	cmp	R0, #96.
+	blos	20$
+	incb	(R5)
+20$:	; check going down
+	inc	R5
+	tst	R0
+	beq	30$
+	cmp	R0, #64.
+	bhis	30$
+	incb	(R5)
+30$:	; check going left
+	inc	R5
+	cmp	R0, #32.
+	blos	40$
+	cmp	R0, #96.
+	bhis	40$
+	incb	(R5)
+40$:	; check going up
+	inc	R5
+	cmp	R0, #64.
+	blos	50$
+	incb	(R5)
+50$:	inc	R5
+	inc	R0
+	cmp	R0, #128.
+	blo	10$
+	return
+
+
+ScrollInText:	.word	StrScroll
+ScrollIn8:	.word	1
+
+; prepare scroller vars
+ScrollPrepare:
+	mov	#StrScroll, ScrollInText
+	mov	#-1, ScrollIn8
+	return
+
+; scroll line of text on bottom
+ScrollBottom:
+	call	SetVreg
+	mov	#C_SCRWID*C_SCROLL_Y+6.+C_VADDR1, (R4)
+	mov	#C_SCRWID, R2
+	; scroll out 1st word
+	mov	#6., R3
+10$:	mov	(R5), R0
+	swab	R0
+	asr	R0
+	swab	R0
+	mov	R0, (R5)
+	add	R2, (R4)
+	sob	R3, 10$
+	; vaddr to next word and scroll next 19
+	sub	#C_SCRWID*6.-1, (R4)
+	mov	#C_SCRWID+1, R2
+	mov	#19., 38$+2
+20$:	mov	#6., R3
+30$:	mov	(R5), R0
+	swab	R0
+	clr	R1
+	asr	R0
+	rorb	R1
+	swab	R0
+	swab	R1
+	mov	R0, (R5)
+	dec	(R4)
+	bis	R1, (R5)	
+	add	R2, (R4)
+	sob	R3, 30$
+	sub	#C_SCRWID*6.-1, (R4)
+38$:	dec	#000000
+	bne	20$
+	; vaddr to previous word
+	dec	(R4)
+	; put text bits on bit #7
+	movb	@ScrollInText, R2
+	sub	#'0, R2				; relative to '0'
+	bge	40$
+	mov	#16., R2			; any chars below '0' converted to #16 (here its a space)
+40$:	ash	#3, R2				; *8 bytes (character font size)
+	add	#FontPpuData, R2		; R2 = font data addr
+	; bis them
+	mov	#6., R3
+50$:	clr	R0
+	clr	R1
+	bisb	(R2)+, R0			; source bits from character data
+	ash	ScrollIn8, R0
+	rorb	R1
+	swab	R1
+	bis	R1, (R5)
+	add	#C_SCRWID, (R4)
+	sob	R3, 50$
+	; advance inner shift and text
+	dec	ScrollIn8
+	cmp	ScrollIn8, #-8.
+	bge	70$
+	mov	#-1, ScrollIn8
+	inc	ScrollInText
+	tstb	@ScrollInText
+	bne	70$
+	mov	#StrScroll, ScrollInText
+70$:	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // SOUND
+; //////////////////////////////////////////////////////////////////////////////
+
+UseSound:	.word	177777
+SoundNum:	.word	0
+
+ProcessSound:
+	tst	UseSound
+	beq	99$
+	mov	SoundNum, R0			; sound # to play
+	beq	99$
+	clr	SoundNum
+	; set play sound PPU command
+	tst	PpuComm
+	bne	.-4
+	mov	R0, PpuCommR0
+	mov	#C_PPU_PLAYSND, PpuComm
+99$:	return
+
+MenuSound:
+	mov	#6, SoundNum
+	call	ProcessSound
+	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // DATA
+; //////////////////////////////////////////////////////////////////////////////
+
+.radix 10	; RADIX 10 (!) RADIX 10 (!) RADIX 10 (!)
+
+Pause:		.word	0
+CurrentMode:	.word	0
+FrameCount:	.word	0
+Palette:	.word	0			; default must be GRB
+
+Level:		.word	0
+Lives:		.word	20
+Score:		.word	0
+UseCheat:	.word	0
+SpawnSpeed:	.word	100			; npc spawn speed
+
+BossFight:	.byte	0
+YouWin:		.byte	0
+
+RightWall:	.byte	0			; right wall presence
+LostCounter:	.byte	0			; are we dying? (counter 1..150 or so)
+ScoreChanged:	.byte	0			; 1 - need redraw score
+LivesChanged:	.byte	0			; 1 - need redraw lives
+BallSuper:	.byte	0
+BallSuperCnt:	.byte	0
+
+TempX:		.word	0
+TempY:		.word	0
+
+
+; angles from bat
+BNorT1:		.byte	85, 82, 79, 76, 74, 72, 71, 70, 69, 68, 67, 66
+		.byte	63  ; ~ 64
+		.byte	62, 61, 60, 59, 58, 57, 56, 54, 52, 50, 47, 44
+		.byte	43, 43, 43
+		.even
+
+BNorT2:		.byte	85, 83, 81, 79, 77, 75, 74, 73, 72, 71
+		.byte	70, 69, 68, 68, 67, 67, 66, 66, 65, 65
+		.byte	63  ; ~ 64
+		.byte	63, 63, 62, 62, 61, 61, 60, 60, 59, 58
+		.byte	57, 56, 55, 54, 53, 51, 49, 47, 45, 43
+		.byte	43, 43, 43
+		.even
+
+; boss bat deflections
+BNorT3:		.byte	104, 108, 111, 114, 117, 119, 121, 122, 123, 124, 125, 126
+		.byte	0  ; center
+		.byte	0, 1, 2, 3, 4, 5, 7, 9, 11, 13, 16, 19
+		.byte	21, 21, 21 
+		.even
+
+
+; npc maximal count
+NpcCnm:		.byte	0, 2, 1, 1, 2, 1, 2, 4, 0, 0
+		.even
+; npc count buffer
+NpcCnt:		.blkb	C_MAX_NPCNUM
+		.even
+
+NPSPAD:	.word	0				; NPC spawn points, 3 words each, 14 spawners max
+NPSPAT:	.blkw	44				; type, x-block, y-block
+
+; NPC table (10 max)
+; NPC object: type, state, substate, spr id, x, y, timer1, timer2, data1, data2
+NpcAdr:		.word	0
+NpcTbl:		.blkw	100			; 10 objects by 10 words
+NpcTbe:
+
+; kub effects tables
+KeffTblLight:	.byte	38., 38., 38., 38., 39., 39., 39., 39., -1, -1, 0
+KeffTblPower:	.byte	40., 40., 41., 41., 42., 42., 43., 43., 44., 44., 45., 45., 46., 46., -1, -1, 0
+KeffTblDisso:	.byte	30., 30., 31., 31., 32., 32., 33., 33., 34., 34., 35., 35., 36., 36., 37., 37., -1, -1, 0
+		.even
+
+; levels addr
+LEVTBL:	.word	LEVF00, LEVF01, LEVF02, LEVF03, LEVF04, LEVF05, LEVF06, LEVF07, LEVF08, LEVF09
+	.word	LEVF10, LEVF11, LEVF12, LEVF13, LEVF14, LEVF15, LEVF16, LEVF17, LEVF18, LEVF19
+
+
+; upper/lower/left bytes for level walls
+LevWUpper:	.byte	018, 019, 020, 019, 021, 020, 019, 022, 022, 020, 019, 021, 020, 019, 020, 023
+LevWLower:	.byte	028, 019, 020, 019, 021, 020, 019, 022, 022, 020, 019, 021, 020, 019, 020, 029
+LevWLeft:	.byte	024, 025, 026, 027, 024, 024, 025, 026, 027, 024
+
+	; npc data: (+128)
+	; 1 face - 129
+	; 2 hive - 130
+	; 3 bee  - 131
+	; 4 romb - 132
+	; 5 bowl - 133
+	; 6 bat  - 134
+	; 7 pot  - 135
+
+	; pwr-ups data: (+64)
+	; E - 17 + 64 = 81
+	; G - 16 + 64 = 80
+	; B - 15 + 64 = 79
+	; S - 14 + 64 = 78
+
+	; level data (packed with zx0)
+
+	.asciz	<0>"SIMPLE ENOUGH"	
+LEVF00:
+@packstart10
+	.byte	  0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0, 003,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0, 003, 002, 003,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	129, 003, 002, 001,  81, 003,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0, 003, 002, 001, 002, 003,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0, 003, 002, 003,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0, 003,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+	.byte	255
+LEVF01:
+@packstart10
+	.byte	  0,  03,   0, 129,   0,   0,   0,  03,   0,   0,   0,   0,   0,   0
+	.byte	 04,  02,  04,   0,   0,   0,  04,  81,  04,   0,   0,   0,   0,   0
+	.byte	  0,  03,   0,   0,  06,   0,   0,  03,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,  06,   0,  06,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	129,   0,  06,   0,  04,   0,  06,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,  06,   0,  04,   0,  06,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,  06,   0,  06,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,  03,   0,   0,  06,   0,   0,  03,   0,   0,   0,   0,   0,   0
+	.byte	 04,  80,  04,   0,   0,   0,  04,  02,  04,   0,   0,   0,   0,   0
+	.byte	  0,  03,   0, 129,   0,   0,   0,  03,   0,   0,   0,   0,   0,   0
+@packend
+
+	.asciz	<0>"BEE?S PROBLEM"
+LEVF02:
+@packstart10
+	.byte	  0,   0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,  01,   0,  06,   0,  01,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,  01,   0,  03,   0,  03,   0,  01,   0,   0,   0,   0,   0,   0
+	.byte	 01,   0,  03,   0,   0,   0,  03,   0,  01,   0,   0,   0,   0,   0
+	.byte	 06,  02, 130,   0,  07,   0,   0,  80,  06,   0,   0,   0,   0,   0
+	.byte	 06,  80, 130,   0,  07,   0,   0,  02,  06,   0,   0,   0,   0,   0
+	.byte	 01,   0,  03,   0,   0,   0,  03,   0,  01,   0,   0,   0,   0,   0
+	.byte	  0,  01,   0,  03,   0,  03,   0,  01,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,  01,   0,  06,   0,  01,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+	.byte	255
+LEVF03:
+@packstart10
+	.byte	  0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	131,   5,   8,   5,   8,   5,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	131,   8,   5,   8,   5,   8,   5,   0,   0,   0,   0,   0,   0,   0
+	.byte	131,   5,   8,   5,   8,   5,   8,   0,   0,   0,   0,   0,   0,   0
+	.byte	131,   8,   5,   7,   7,   8,   5,   0,   0,   0,   0,   0,   0,   0
+	.byte	131,   5,   8,   7,   7,   5,   8,   0,   0,   0,   0,   0,   0,   0
+	.byte	131,   8,   5,   8,   5,   8,   5,   0,   0,   0,   0,   0,   0,   0
+	.byte	131,   5,   8,   5,   8,   5,   8,   0,   0,   0,   0,   0,   0,   0
+	.byte	131,   0,   5,   8,   5,   8,   5,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+	.byte	255
+LEVF04:
+@packstart10
+	.byte	  0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   3,   7,   0,   2,   7,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   3,   7,   2,   2,   7,   2,   3,   0,   0,   0,   0,   0,   0
+	.byte	  0,   3,   7,  81,   2,   2,   2,   3,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   3,   2,  80,   2,   3,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   3,   2,   3,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   3,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+	.asciz	<0>"RHOM BUSES"
+LEVF05:
+@packstart10
+	.byte	  0,   0,   2,   0,   0,  81,   0,   0,   2,   0,   0,   0,   0,   0
+	.byte	  0,   0,   6,   0,   0,   6,   0,   0,   6,   0,   0,   0,   0,   0
+	.byte	  0,   0,   6,   0,   0,   6,   0,   0,   6,   0,   0,   0,   0,   0
+	.byte	  0,   0,   6,   0,   0,   6,   0,   0,   6,   0,   0,   0,   0,   0
+	.byte	  0,   0,   6,   0,   0,   6,   0,   0,   6,   0,   0,   0,   0,   0
+	.byte	  0,   0,   6, 132,   0,   6, 132,   0,   6,   0,   0,   0,   0,   0
+	.byte	  0,   0,   6,   0,   0,   6,   0,   0,   6,   0,   0,   0,   0,   0
+	.byte	  0,   0,   6,   0,   0,   6,   0,   0,   6,   0,   0,   0,   0,   0
+	.byte	  0,   0,   6,   0,   0,   6,   0,   0,   6,   0,   0,   0,   0,   0
+	.byte	  0,   0,  81,   0,   0,   2,   0,   0,  81,   0,   0,   0,   0,   0
+@packend
+
+	.byte	255
+LEVF06:
+@packstart10
+	.byte	  0,   0,   0,   2,   2, 129,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   2,   7,   7,   2,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,  80,   2,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   9,   9,   9,   9,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   9,   0,   9,   9,   0,   9,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   6,   0,   9,   9,   0,   6,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   9,   9,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   2,  80,   2, 129,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   2,   0,   0,   2,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   9,   9, 130,   0,   9,   9,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+	.asciz	<0>"GO BOWL"
+LEVF07:
+@packstart10
+	.byte	  0,   0, 132,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   8,   5,   8,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   5,   5,   5,   0,   0,   0,   0,   6,   0,   0,   0,   0,   0
+	.byte	133,   8,  81,   8,   0,   0,   6,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   5,   2,   5,   0,   0,   7,   6,   0,   0,   0,   0,   0,   0
+	.byte	  0,   8,   2,   8,   0,   0,   7,   0,   0,   0,   0,   0,   0,   0
+	.byte	133,   5,  81,   5,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   8,   5,   8,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   5,   8,   5,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0, 132,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+	.asciz	<0>"BOMBS AWAY"
+LEVF08:
+@packstart10
+	.byte	  0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   3,   4,   4,   4,   0,   4,   4,   0,   0,   0,   0,   0
+	.byte	  0,   3,   3,   3,   3,   3,   4,   4,   4,   0,   0,   0,   0,   0
+	.byte	  1,  79,   3,  79,   3,  79,   3,  79,   0,   0,   0,   0,   0,   0
+	.byte	  0,   3,   3,   3,   3,   3,   4,   4,   4,   0,   0,   0,   0,   0
+	.byte	  0,   0,   3,   4,   4,   4,   0,   4,   4,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0, 129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+	.byte	255
+LEVF09:
+@packstart10
+	.byte	  0,   0,   3,   0, 129,   0,   3,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   3,  79,   3,   0,   3,  79,   3,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   3,   0,   0,   0,   3,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   3,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	130,   0,   0,   3,   0,   3,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   3,   0,   3,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   3,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   3,   0,   0,   0,   3,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   3,  79,   3,   0,   3,  79,   3,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   3,   0, 129,   0,   3,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+	.asciz	<0>"BATMAN"
+LEVF10:
+@packstart10
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	134,   6,   6,   6,   6,   6,   6,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,  79,   0,   0, 134,   4,   4,   0,   0,   0,   0,   0,   0
+	.byte	  0,   6,   6,   6,   6,   6,   6,   6,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,  79,   0,   0,   0,   0,   4,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,  79,   0,   0,   0,   0,   4,   0,   0,   0,   0,   0,   0
+	.byte	  0,   6,   6,   6,   6,   6,   6,   6,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,  79,   0,   0, 134,   4,   4,   0,   0,   0,   0,   0,   0
+	.byte	134,   6,   6,   6,   6,   6,   6,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+	.byte	255
+LEVF11:
+@packstart10
+	.byte	  6,   0,   0,   0,   0,   0,   0,   0,   6,   0,   0,   0,   0,   0
+	.byte	  0,   6,   0,   0,   0,   0,   0,   6,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   6,   9,   0,   9,   6,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   4,   9,   6, 134,   6,   9,   0,   0,   0,   0,   0,   0,   0
+	.byte	  4,   9,   0,   0,  81,   0,   0,   9,   0,   0,   0,   0,   0,   0
+	.byte	  4,   9,   0,   0,  80,   0,   0,   9,   0,   0,   0,   0,   0,   0
+	.byte	  0,   4,   9,   6, 134,   6,   9,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   6,   9,   0,   9,   6,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   6,   0,   0,   0,   0,   0,   6,   0,   0,   0,   0,   0,   0
+	.byte	  6,   0,   0,   0,   0,   0,   0,   0,   6,   0,   0,   0,   0,   0
+@packend
+
+	.asciz	<0>"DIGITAL"
+LEVF12:
+@packstart10
+	.byte	  0,   0,   7,   0,   0,   6,   6,   6,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   7,   0,   0,   6, 134,   6,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   7,   0,   0,   6,   0,   6,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   7,   0,   0,   6,   6,   6,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   6,   6,   6,   0,   0,   7,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   6, 134,   6,   0,   0,   7,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   6,   0,   6,   0,   0,   7,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   6,   6,   6,   0,   0,   7,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+	.byte	255
+LEVF13:
+@packstart10
+	.byte	129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   6,   6,   6,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   6,   0,   6,   0,   0,   0,   0,   0,   0
+	.byte	  0,   6,   6,   6,   0,   6,   6,   6,   0,   0,   0,   0,   0,   0
+	.byte	  0,   6,  81,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   6,  81,   6,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   6,   6,   6,   0,   6,   6,   6,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   6,   0,   6,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   6,   6,   6,   0,   0,   0,   0,   0,   0
+	.byte	129,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+	.asciz	<0>"WHAT A"
+LEVF14:
+@packstart10
+	.byte	129,   0,   0,   1,   7,  78,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   2,   7,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   3,   7,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   3,   7,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   5,   7,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   5,   7,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   3,   7,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   3,   7,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   2,   7,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	129,   0,   0,   1,   7,  78,   0,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+	.byte	255
+LEVF15:
+@packstart10
+	.byte	134,   0,   0,   0,   1,   2,   7,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   1,   2,   7,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   7,   7,   7,   7,   7,   7,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   7,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   7,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   7,   7,   7,   7,   7,   7,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   1,   2,   7,   0,   0,   0,   0,   0,   0,   0
+	.byte	134,   0,   0,   0,   1,   2,   7,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+	.asciz	<0>"WHO TURNED OUT THE LIGHTS"
+LEVF16:
+@packstart10
+	.byte	129,   1,   1,   1,   1,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   1,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   1,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   1,   1,   1,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   1,   1,   1,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   1,   1,   1,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   1,   1,   1,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   1,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   1,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	129,   1,   1,   1,   1,   0,   0,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+	.byte	255
+LEVF17:
+@packstart10
+	.byte	135, 135, 135, 135, 135, 135, 135, 135,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  7,   7,   0,   0,   7,   7,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  1,   1,   7,   7,   3,   3,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  1,   1,   2,   2,   3,   3,   7,   7,   0,   0,   0,   0,   0,   0
+	.byte	  1,   1,   2,   2,   3,   3,   4,   4,   0,   0,   0,   0,   0,   0
+	.byte	  1,   1,   2,   2,   3,   3,   4,   4,   0,   0,   0,   0,   0,   0
+	.byte	  1,   1,   2,   2,   3,   3,   4,   4,   0,   0,   0,   0,   0,   0
+@packend
+
+	.asciz	<0>"HANGAR 18"
+LEVF18:
+@packstart10
+	.byte	  0, 135,   0, 135,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	133,   7,   0,   7,   7,   7,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   7,   0,   7,   1,   7,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   7,   0,   7,   1,   7,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   7,   0,   7,   7,   7,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   7,   0,   7,   1,   7,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   7,   0,   7,   1,   7,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	133,   7,   0,   7,   7,   7,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+	.asciz	<0>"BOSS FIGHT"
+LEVF19:
+@packstart10
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+	.byte	  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+@packend
+
+
+; blocks power (3 - unbreakable)
+BGOPWR:		.byte	0, 1, 1, 1, 1, 1, 2, 3, 1, 1	; 00..09
+		.byte	1, 1, 1, 1, 1, 1, 0, 0, 0, 0	; 10..19
+		.byte	0, 0, 0, 0, 0, 0, 0, 0, 0, 0	; 20..29
+		.even
+
+; animation state 0 - emerging sprites
+Spt000:		.byte	02, 03, 04, 05
+; animation state 255 - dying
+Spt255:		.byte	20, 21, 22, 23
+
+; animation 1 - 'face' npc
+Spt001:		.byte	10, 11, 12, 13, 11, 10, 15, 14
+; animation 2 - 'hive' npc
+Spt002: 	.byte	30, 31, 32, 33
+; 'bee' animation
+Spt003: 	.byte	34, 35
+; 'romb' animation
+Spt004:		.byte	36, 37, 38, 39, 38, 37
+; 'bowling' animation
+Spt005:		.byte	40, 41, 42, 43
+; 'npc bat' animation
+Spt006:		.byte	50, 51, 52, 53
+; 'pot' animation
+Spt007:		.byte	06, 07, 08, 09
+; 'stunned' animation
+Spt020:		.byte	44, 45, 46, 47
+
+
+SndTable:	.word	0, Snd001, Snd002, Snd003, Snd004, Snd005, Snd006, 0, 0, 0
+
+; bat deflection
+Snd001:		.byte	216, 184, 192, 184, 184, 192, 184, 192, 176, 200, 176, 208
+		.byte	168, 216, 160, 224
+		.byte	0
+; kub dissolve
+Snd002:		.byte	112,112,112,112,112,104,112,104,112,96,112,96,104,88
+		.byte	0
+; npc 'boom'
+Snd003:		.byte	250, 230, 210, 216, 184, 176, 1
+		.byte	184, 144, 136, 128,  80, 112, 1
+		.byte	250, 230, 210, 250, 230, 210, 1
+		.byte	184, 144, 136, 128,  80, 112, 1
+		.byte	 96,  80,  72, 128, 144, 176, 1
+		.byte	176, 192, 208, 208, 224, 240, 1
+		.byte	176, 192, 208, 128, 144, 176, 1
+		.byte	 96,  80,  72,  80,  72,  64, 1
+		.byte	 96,  80,  72,  80,  72,  64, 1
+		.byte	0
+; power-up
+Snd004:		.byte	250, 252, 254, 254, 252, 250, 252, 254, 254, 252, 252, 250
+		.byte	250, 252, 254, 254, 252, 250, 252, 254, 254, 252, 252, 250
+		.byte	250, 252, 254, 254, 252, 250, 252, 254, 254, 252, 252, 250, 1
+		.byte	210, 211, 212, 213, 212, 211, 210, 209, 208, 209, 210, 210	
+		.byte	210, 211, 212, 213, 212, 211, 210, 209, 208, 209, 210, 210	
+		.byte	210, 211, 212, 213, 212, 211, 210, 209, 208, 209, 210, 210, 1
+		.byte	180, 182, 181, 182, 182, 182, 182, 182, 182, 180, 180, 190
+		.byte	180, 182, 181, 182, 182, 182, 182, 182, 182, 180, 180, 190
+		.byte	180, 182, 181, 182, 182, 182, 182, 182, 182, 180, 180, 190, 1
+		.byte	161, 162, 163, 163, 163, 163, 164, 164, 164, 165, 165, 165
+		.byte	165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165
+		.byte	165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 1
+		.byte	120, 125, 124, 123, 121, 120, 125, 124, 123, 122, 121, 120
+		.byte	120, 125, 124, 123, 121, 120, 125, 124, 123, 122, 121, 120
+		.byte	120, 125, 124, 123, 121, 120, 125, 124, 123, 122, 121, 120
+		.byte	0
+; kub h-light
+Snd005:		.byte	90, 80, 100, 80, 90, 90, 90, 90
+		.byte	90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90
+		.byte	92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103
+		.byte	104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115
+		.byte	116, 117, 118, 119, 120, 121, 122
+		.byte	0
+
+; simple menu sound
+Snd006:		.byte	150, 140, 130, 120, 110, 100, 0
+
+		.even
+
+.radix 8	; RADIX 8 (!) RADIX 8 (!) RADIX 8 (!)
+
+; movements by angle 0..127 (in float), dx, dy
+TBAlph:		.byte	64.,0., 63.,3., 63.,6., 63.,9., 62.,12., 62.,15., 61.,18., 60.,21., 59.,24.
+		.byte	57.,27., 56.,30., 54.,32., 53.,35., 51.,38., 49.,40., 47.,42., 45.,45., 42.,47.
+		.byte	40.,49., 38.,51., 35.,53., 32.,54., 30.,56., 27.,57., 24.,59., 21.,60., 18.,61.
+		.byte	15.,62., 12.,62., 9.,63., 6.,63., 3.,63., 0.,64., -3.,63., -6.,63., -9.,63.
+		.byte	-12.,62., -15.,62., -18.,61., -21.,60., -24.,59., -27.,57., -30.,56., -32.,54., -35.,53.
+		.byte	-38.,51., -40.,49., -42.,47., -45.,45., -47.,42., -49.,40., -51.,38., -53.,35., -54.,32.
+		.byte	-56.,30., -57.,27., -59.,24., -60.,21., -61.,18., -62.,15., -62.,12., -63.,9., -63.,6.
+		.byte	-63.,3., -64.,0., -63.,-3., -63.,-6., -63.,-9., -62.,-12., -62.,-15., -61.,-18., -60.,-21.
+		.byte	-59.,-24., -57.,-27., -56.,-30., -54.,-32., -53.,-35., -51.,-38., -49.,-40., -47.,-42., -45.,-45.
+		.byte	-42.,-47., -40.,-49., -38.,-51., -35.,-53., -32.,-54., -30.,-56., -27.,-57., -24.,-59., -21.,-60.
+		.byte	-18.,-61., -15.,-62., -12.,-62., -9.,-63., -6.,-63., -3.,-63., 0.,-64., 3.,-63., 6.,-63.
+		.byte	9.,-63., 12.,-62., 15.,-62., 18.,-61., 21.,-60., 24.,-59., 27.,-57., 30.,-56., 32.,-54.
+		.byte	35.,-53., 38.,-51., 40.,-49., 42.,-47., 45.,-45., 47.,-42., 49.,-40., 51.,-38., 53.,-35.
+		.byte	54.,-32., 56.,-30., 57.,-27., 59.,-24., 60.,-21., 61.,-18., 62.,-15., 62.,-12., 63.,-9.
+		.byte	63.,-6., 63.,-3.
+
+Str000:		.asciz	<4>"PRESS "<7>"SPACE"
+Str002:		.asciz	"1"<2>":;"<6>"PALETTE"
+Str003:		.asciz	"2"<2>":;"<6>"SOUND"
+Str004:		.asciz	"3"<2>":;"<6>"CHEAT"
+Str010:		.asciz	"OFF"
+Str011:		.asciz	"ON "
+Str013:		.asciz	<6>"SCORE"
+Str012:		.asciz	<6>"LEVEL"
+StrOver:	.asciz	"GAME OVER"
+StrWin:		.asciz	"YOU WIN"
+StrScroll:	.ascii	"KRAKOUT FOR MS^0511 <UKNC> BY BLAIRE CAS ] REDDIE=  ORIGINAL\ SINCLAIR ZX SPECTRUM GAME:;<C> GREMLIN GRAPHICS 1987=  "
+		.ascii	"THANKS\ N=ZEEMIN[ TITUS <EMULATORS>[ KUVO <PT3 PLAYER>=== AND ALL FROM MS^0511 COMMUNITY=  "
+		.asciz	"                             "
+		.even
+
+; graphics
+@include cpu_tiles.mac
+@include ppu_font.mac
+
+		.even
+ProgramEnd:
+
+; empty blocks
+
+LevelC		= ProgramEnd		; currently playing level - must be 192. bytes
+PowerC		= 192.   + LevelC	; power-ups for level - must be 16. words (8. power-ups max)
+
+KeffCount	= 32.    + PowerC
+KeffData	= 2.     + KeffCount	; kub effects data [k-addr] [sequence addr]
+KeffDataEnd	= 80.    + KeffData	; 20. effects maximum (4 bytes for one)
+
+AngToDirTbl	= 0.     + KeffDataEnd	; angle to directions table [right, down, left, up] bytes for 0..127. angles
+KAddr2Vaddr	= 512.   + AngToDirTbl	; table of k-addr to vaddr conversion
+
+TopRamAddr	= 192.*2 + KAddr2Vaddr
+
+; //////////////////////////////////////////////////////////////////////////////
+; // The End
+; //////////////////////////////////////////////////////////////////////////////
+
+.even
+CpuEnd:
+
+	.end	Start

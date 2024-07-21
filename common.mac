@@ -1,0 +1,136 @@
+; video
+C_VBUF1		= 100000
+C_VBUF2		= 126450
+C_SCRWID 	= 40.
+C_VADDR1	= 16.*40.+4.+C_VBUF1
+C_VADDR2	= 16.*40.+4.+C_VBUF2
+C_SCRSIZE	= C_SCRWID*288.
+C_FIELD_Y	= 32.
+
+
+; PPU procedures
+C_PPU_ERROR	= 00.
+C_PPU_PALUPD	= 01.
+C_PPU_WAITUPD	= 02.
+C_PPU_CLEARSC2	= 03.
+C_PPU_COPYKUB2	= 04.
+C_PPU_PRINTSTR	= 05.
+C_PPU_DRAWTILE	= 06.
+C_PPU_DRAWSPR	= 07.
+C_PPU_RESEFBUF	= 08.
+C_PPU_DRAWFBUF	= 09.
+C_PPU_CLEAFBUF	= 10.
+C_PPU_DRAWBAT	= 11.
+C_PPU_QUEUECOM	= 12.
+C_PPU_ERROR	= 13.
+C_PPU_QUEUEEXE	= 14.
+C_PPU_MUSINIT	= 15.
+C_PPU_MUSPLAY	= 16.
+C_PPU_MUSMUTE	= 17.
+C_PPU_XORSPR	= 18.
+C_PPU_PLAYSND	= 19.
+
+
+; game modes
+C_MODE_RESET	= 0.
+C_MODE_MENU	= 1.
+C_MODE_PREPARE	= 2.
+C_MODE_PRELEV	= 3.
+C_MODE_PLAY	= 4.
+C_MODE_LEVEND	= 5.
+C_MODE_LOST	= 6.
+C_MODE_OVER	= 7.
+C_MODE_WIN	= 8.
+
+
+; logic
+C_MAX_ONSCRSPR	= 16.			; max sprites on screen
+C_FIELD_Y	= 32.
+C_BATX_PIX	= 216.
+C_BATX_WORD	= C_BATX_PIX/8.
+C_BATBOSSX_PIX	= 32.
+C_BATBOSSX_WORD	= C_BATBOSSX_PIX/8.
+C_BATX2BALLX	= C_BATX_PIX-14.*256.
+C_BATVEL_MIN	= 1*256.
+C_BATDVEL_MIN	= 18.
+C_BALLVEL_MIN	= 8.			; min ball velocity
+C_BALLVEL_MAX	= 8.			; max
+C_LEVEL_MAX	= 19.
+
+
+; npc #
+C_MAX_NPCNUM	= 10.			; 0..9 npc #
+C_NPC_FACE	= 1.
+C_NPC_BEEHIVE	= 2.
+C_NPC_BEE	= 3.
+C_NPC_ROMB	= 4.
+C_NPC_BOWL	= 5.
+C_NPC_BAT	= 6.
+C_NPC_POT	= 7.
+
+
+; power-ups #
+C_PWR_E		= 17.
+C_PWR_G		= 16.
+C_PWR_B		= 15.
+C_PWR_S		= 14.
+
+
+; menu
+C_MENUY		= 60.
+C_SCROLL_Y	= 230.
+
+
+; Keys 'down' scancodes
+C_KEY_SPACE	= ^B01001011
+C_KEY_1		= ^B00011000
+C_KEY_2		= ^B00011001
+C_KEY_3		= ^B00011010
+C_KEY_UP	= ^B01101100
+C_KEY_DOWN	= ^B01011100
+
+
+; //////////////////////////////////////////////////////////////////////////////	
+; // CPU <-> PPU comm addrs 
+; //////////////////////////////////////////////////////////////////////////////
+
+; Keyboard
+Key8		= 157670		; Key 8
+Key7		= 157672		; key 7
+Key6		= 157674		; key 6
+Key5		= 157676		; key 5
+Key4		= 157700		; key 4
+Key3		= 157702		; key 3
+Key2		= 157704		; key 2
+Key1		= 157706		; key 1
+KeyK5		= 157710		; Key K5
+KeyK4		= 157712		; key K4
+KeyK3		= 157714		; key K3
+KeyK2		= 157716		; key K2
+KeyK1		= 157720		; key K1
+KeyStop		= 157722		; key STOP
+KeyUst		= 157724		; key UST
+KeyShift	= 157726		; key SHIFT
+KeyEnter	= 157730		; key ENTER
+KeySpace	= 157732		; key SPACE
+KeyRight	= 157734		; key ->
+KeyLeft		= 157736		; key <-
+KeyDown		= 157740		; key DOWN
+KeyUp		= 157742		; key UP
+KeyCombo	= 157744		; combo was pressed
+KeyAny		= 157746		; key 'anykey'
+KeyCurrent	= 157750		; current key
+
+; Misc
+PpuRtiCount	= 157754		; interrupts count in PPU
+PpuWaitCount	= 157756		; PPU wait cycles number
+VsyncCount2	= 157760		; vsync 2 counter (PPU)
+VsyncCount1	= 157762		; vsync 1 counter (CPU)
+
+; command and data
+PpuCommQue	= 157764
+PpuCommR0	= 157766
+PpuCommR1	= 157770
+PpuCommR2	= 157772
+PpuCommR3	= 157774
+PpuComm		= 157776		; PPU command

@@ -1,0 +1,767 @@
+	.title	PPU
+	.list	MEB
+	.enabl	LC, AMA
+	
+	.asect
+	.=0
+
+@include common.mac
+@include ppu_header.mac
+
+PPMain:	; clean upper PPU RAM (with screen plane 0)
+	mov	#PpuEnd, R0
+	mov	#177000-PpuEnd/2, R3
+	clr	(R0)+
+	sob	R3, .-2
+
+	; timers
+	bic	#^B0000001000000000, @#177054	; disable vsync in PPU
+	bis	#^B0000000100000000, @#177054	; enable vsync in CPU
+	call	TimerInit			; init pp timer
+	bic	#200, @#177716			; turn off sound generator
+
+	; keyboard
+	mov	#KeyboardInt,  @#300
+	bis	#100, @#177700			; allow keyboard interrupts
+
+        ; set 'PPU is ready'
+	mov	#PpuComm/2, @#177010
+	clr	@#177014
+
+	; and here we go
+	mtps	#0
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // MAIN PPU CYCLE
+; //////////////////////////////////////////////////////////////////////////////
+
+MainCycle:
+	call	CmdProcess
+	br	MainCycle
+
+
+; process command from CPU
+CmdProcess:
+	mov	#177010, R4
+	mov	#177014, R5
+	mov	#PpuComm/2, (R4)
+	tst	(R5)
+	bne	10$
+	inc	PpuWaiting
+	return
+10$:	mov	#PpuCommR0/2, (R4)		; set up registers
+	mov	(R5), R0
+	inc	(R4)
+	mov	(R5), R1
+	inc	(R4)
+	mov	(R5), R2
+	inc	(R4)
+	mov	(R5), R3
+	inc	(R4)
+	mov	(R5), R5
+	asl	R5
+	call	@CommandsTable(R5)
+	mov	#PpuComm/2, @#177010		; mark as executed
+	clr	@#177014
+	return
+
+; commands table
+CommandsTable:
+	.word	Error			; 00. can't be
+	.word	PalUpdate		; 01. set palette
+	.word	UpdWaitCycles		; 02. write empty PPU cycles to CPU
+	.word	ClearScreen2		; 03. clear screen buffer 2
+	.word	CopyKubBuf2		; 04. copy kub by s-addr from screen-2 to screen-1
+	.word	PrintStr		; 05. print string
+	.word	DrawTile		; 06. draw tile
+	.word	DrawSprite		; 07. draw plane-0 sprite
+	.word	ResetFBuf		; 08. clears and resets fbuf
+	.word	DrawFBuf		; 09. copy fbuf to screen-1
+	.word	ClearFBuf		; 10. clears current portions of fbuf
+	.word	DrawBat			; 11. draws the bat
+	.word	QueueCom		; 12. queue PPU command
+	.word	Error			; i don't like number 13 ^_^
+	.word	QueueExec		; 14. execute queue
+	.word	Pt3Init			; 15. pt3 player init
+	.word	Pt3Play			; 16. pt3 play one tick
+	.word	Pt3Mute			; 17. pt3 mute
+	.word	XorSprite		; 18. xor sprite to screen 1 without fbuf
+	.word	PlaySound		; 19. start playing sound
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Utils
+; //////////////////////////////////////////////////////////////////////////////
+
+; TODO: something with error
+Error:	mtps	#200
+	br	.
+
+
+; empty interrupt
+RtiAdr:	rti
+
+
+; set registers for vaddr
+SetVreg:
+	mov	#177010, R4			; R4 = vaddr reg
+	mov	#177012, R5			; R5 = vdata reg
+	return
+
+
+; pp timer ready wait
+TimerInit:
+	clr	@#177710
+	tst	@#177714
+	tst	@#177710
+	bne	TimerInit
+	return
+
+
+; get CPU RAM byte -> R0 and advance addr
+GetB12:	mov	(PC)+, R0
+GetA12:	.word	0
+	inc	GetA12
+	clc					; set to 'sec' for use with vram12
+	ror	R0
+	bcs	10$
+	mov	R0, @#177010
+	movb	@#177014, R0
+	return
+10$:	mov	R0, @#177010
+	movb	@#177015, R0
+	return
+
+
+; keyboard interrupt
+KeyboardInt:
+	mov	R0, -(SP)
+	mov	@#177702, R0			; (!) read this register ONLY ONCE
+	mov	R1, -(SP)
+	mov	R2, -(SP)
+	mov	R3, -(SP)
+	mov	R4, -(SP)
+	mov	R5, -(SP)
+	mov	#177010, R4
+	mov	#177014, R5
+	mov	(R4), -(SP)			; save vaddr register 
+	; now R0-keycode, (R4)-vaddr, (R5)-vdata
+	mov	#KeyCurrent/2, (R4)
+	mov	R0, (R5)
+	bit	#^B10000000, R0			; key was released?
+	bne	50$
+	; 0 2 4 6 8 10 == dn,dn,up,up,dn,up ? -> combo is pressed
+	; put pressed keys to buffer
+	mov	#KeysBuffer, R1
+	mov	#KeysBuffer+1, R2
+	movb	(R2)+, (R1)+
+	movb	(R2)+, (R1)+
+	movb	(R2)+, (R1)+
+	movb	(R2)+, (R1)+
+	movb	(R2)+, (R1)+
+	movb	R0, (R1)+
+	; check for key buffer combo ^_^
+	mov	#6., R3
+2$:	cmpb	(R2)+, -(R1)
+	bne	4$
+	sob	R3, 2$	
+	mov	#KeyCombo/2, (R4)		; set 'combo is pressed'
+	inc	(R5)
+4$:	; -----------------
+	; == key pressed ==
+	mov	#KeyAny/2, (R4)			; 'anykey' is also pressed
+	inc	(R5)
+	mov	#KeysDN, R1
+10$:	tst	(R1)
+	beq	90$
+	cmp	R0, (R1)+
+	beq	20$
+	add	#4, R1
+	br	10$
+20$:	; got our key
+	mov	(R1)+, (R4)			; set CPU addr
+	inc	(R5)				; must be mov #1,(R5) but its ok with inc
+	mov	(R1)+, (R4)
+	beq	90$	
+	clr	(R5)
+	br	90$
+50$:	; == key released - R0 = ^B1000xxxx
+	bic	#^B1111111111110000, R0
+	asl	R0
+	mov	KeysUP+2(R0), R1		; finish addr
+	mov	KeysUP(R0), R0			; start addr
+60$:	cmp	R0, R1				; finished?
+	bhis	90$
+	mov	(R0)+, (R4)			; set CPU addr
+	clr	(R5)				; and clear key
+	br	60$
+	;
+90$:	mov	(SP)+, (R4)
+	mov	(SP)+, R5
+	mov	(SP)+, R4
+	mov	(SP)+, R3
+	mov	(SP)+, R2
+	mov	(SP)+, R1
+	mov	(SP)+, R0
+	rti
+
+; keys release - clear addrs
+KeysUP:	.word	Kup0000, Kup0001, Kup0010, Kup0011, Kup0100, Kup0101, Kup0110, Kup0111
+	.word	Kup1000, Kup1001, Kup1010, Kup1011, Kup1100, Kup1101, Kup1110, Kup1111
+	.word	Kup7777
+Kup0000:
+Kup0001:
+Kup0010:
+Kup0011:
+Kup0100:	.word	KeyStop/2
+Kup0101:	.word	KeyShift/2
+Kup0110:
+Kup0111:
+Kup1000:	.word	Key1/2, KeyK1/2
+Kup1001:	.word	Key2/2, KeyK2/2
+Kup1010:	.word	Key3/2, KeyUst/2, KeyK3/2
+Kup1011:	.word	Key4/2, KeySpace/2, KeyRight/2
+Kup1100:	.word	Key5/2, KeyDown/2, KeyUp/2, KeyK4/2
+Kup1101:	.word	Key6/2, KeyK5/2
+Kup1110:	.word	Key7/2, KeyLeft/2
+Kup1111:	.word	Key8/2
+Kup7777:
+
+; keys press - set 1st addr, clear second
+KeysDN:	.word	^B00000100, KeyStop/2,		0
+	.word	^B01101010, KeyUst/2,		0
+	.word	^B00011000, Key1/2,		0
+	.word	^B00011001, Key2/2,		0
+	.word	^B00011010, Key3/2,		0
+	.word	^B00001011, Key4/2,		0
+	.word	^B00011100, Key5/2,		0
+	.word	^B00011101, Key6/2,		0
+	.word	^B00001110, Key7/2,		0
+	.word	^B00001111, Key8/2,		0
+	.word	^B01001011, KeySpace/2,		0
+	.word	^B01011100, KeyDown/2,		KeyUp/2
+	.word	^B01101100, KeyUp/2,		KeyDown/2
+	.word	^B01001110, KeyLeft/2, 		KeyRight/2
+	.word	^B01011011, KeyRight/2,		KeyLeft/2
+	.word	^B00001000, KeyK1/2,		0
+	.word	^B00001001, KeyK2/2,		0
+	.word	^B00001010, KeyK3/2,		0
+	.word	^B00001100, KeyK4/2,		0
+	.word	^B00001101, KeyK5/2,		0
+	.word	^B01000101, KeyShift/2,		0
+	.word	0
+	
+KeysBuffer:	.blkb	6				; last 6 keys
+		.byte	154, 134, 154, 154, 134, 134	; dn,dn,up,up,dn,up written backwards
+
+
+; (!) print buffer, so max string length is 79. (!)
+;PrintBuf:	.blkb	80.
+
+; print string from CPU RAM data
+; [comm]R0 - text addr in CPU!
+; [comm]R1 - vaddr
+; codes in string - [0..7] - change color
+PrintStr:
+	; first copy string to buffer here
+	mov	#177010, R4		; R4 = vaddr reg
+	mov	#177014, R5
+	mov	#PpuCommR0/2, (R4)
+	mov	(R5), GetA12
+	mov	#PpuCommR1/2, (R4)
+	mov	(R5), (R4)
+	; now can print
+	mov	#177024, R5		; R5 = vdata reg for output
+	; mov	R1, (R4)		; set initial vaddr
+	mov	#7., @#177016		; default font color is white
+	clr	@#177020		; background is black
+	clr	@#177022
+	mov	#C_SCRWID, R2		; vaddr addition
+10$:	mov	(R4), -(SP)		; save vaddr reg (next call will change it)
+	call	GetB12			; get byte from CPU ram and advance it
+	mov	(SP)+, (R4)		; restore vaddr reg
+	movb	R0, R1			; get text byte (latin text only, or else need to clear upper byte)
+	beq	99$			; zero - exit
+	cmp	R1, #7.			; is it special symbol
+	bhi	20$
+	; change font color
+	mov	R1, @#177016
+	br	10$
+20$:	sub	#'0, R1			; relative to '0'
+	bge	30$
+	mov	#16., R1		; any chars below '0' converted to #16 (here its a space)
+30$:	asl	R1			; *8 bytes (character font size)
+	asl	R1
+	asl	R1
+	add	#FontPpuData, R1	; R1 = font data
+	.rept	6.			; out character
+	movb	(R1)+, R3
+	mov	R3, (R5)		; if use movb - it will be 'bis'
+	add	R2, (R4)
+	mov	R3, (R5)		; double font height
+	add	R2, (R4)
+	.endr
+	sub	#C_SCRWID*12.-1, (R4)	; advance vaddr
+	br	10$
+99$:	return 
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // PPU procedures 
+; //////////////////////////////////////////////////////////////////////////////
+
+; pallete update, R0:R1 palette qword
+PalUpdate:
+	mov	#VLinesBegin, R5
+	mov	R0, (R5)+
+	mov	R1, (R5)+
+	return
+
+
+; update empty wait cycles to CPU (debug purposes)
+PpuWaiting:	.word	0		; PPU wait cycles counter
+UpdWaitCycles:
+	mov	#<PpuWaitCount/2>, @#177010
+	mov	PpuWaiting, @#177014
+	clr	PpuWaiting
+	return
+
+
+; clear second screen
+ClearScreen2:
+	call	SetVreg
+	mov	#C_VADDR2, (R4)
+	mov	#C_SCRSIZE, R3
+10$:	clr	(R5)
+	inc	(R4)
+	sob	R3, 10$
+	return
+
+
+; copy kub 16x16 from buffer 2 to buffer 1
+; R0 - s-addr
+CopyKubBuf2:
+	mov	R0, R1
+	bic	#^B1111111100001111, R1			; Y * 16
+	mul	#C_SCRWID, R1
+	bic	#^B1111111111110000, R0
+	asl	R0
+	add	R0, R1
+	mov	R1, R2
+	add	#C_VADDR2, R1				; source vaddr
+	add	#C_VADDR1, R2				; dest vaddr
+	mov	#16., R3
+	mov	#177010, R4
+	mov	#177012, R5
+	mov	R1, (R4)
+10$:	movb	(R5), (R2)+
+	inc	(R4)
+	movb	(R5), (R2)
+	add	#C_SCRWID-1, (R4)
+	add	#C_SCRWID-1, R2
+	sob	R3, 10$
+	return
+
+
+; draws tile plane-0
+; R0 - tile #, R1 - vaddr
+DrawTile:
+	; get source addr
+	ash	#5, R0				; R0 = tile# * 32.
+	add	#TilesData, R0			; R0 = tile addr
+	; output tile
+	mov	#177010, R4
+	mov	#177012, R5
+	mov	R1, (R4)			; set vaddr
+	mov	#C_SCRWID-1., R1
+	.rept	16.
+	movb	(R0)+, (R5)
+	inc	(R4)
+	movb	(R0)+, (R5)
+	add	R1, (R4)
+	.endr
+	return
+
+
+; framebuffer data
+FBufCur:	.word	0
+FBufDataPrev:	.blkw	3*C_MAX_ONSCRSPR	; previous screen fbuf coords
+FBufData:	.blkw	3*C_MAX_ONSCRSPR	; [type, vaddr scr2, dy] type: 1-spr16, 2-bat
+FBufDataEnd:
+
+; reset framebuffer
+ResetFBuf:
+	call	ClearScreen2
+	mov	#FBufDataPrev, R0
+	mov	#FBufDataEnd-FBufDataPrev/2, R3
+	clr	(R0)+
+	sob	R3, .-2
+	mov	#FBufData, FBufCur
+	return
+
+; copy framebuffer to screen-1
+DrawFBuf:
+	mov	#177010, R4			; set vregs
+	mov	#177012, R5
+	mov	#FBufDataPrev, R0		; previous fbuf data addr
+	call	10$				; draw previous
+	mov	#FBufData, R0			; current fbuf data addr
+10$:	mov	(R0)+, R1			; object type
+	beq	99$
+	mov	(R0)+, R2			; vaddr in screen-2
+	mov	(R0)+, R3			; DY
+	; move it to screen-1
+	mov	R2, (R4)			; vaddr in screen-2
+	sub	#C_VADDR2-C_VADDR1, R2		; vaddr in screen-1
+	; is it a sprite 16x16?
+	cmp	R1, #1
+	bne	30$
+	mov	#C_SCRWID-2, R1			; next line addition
+20$:	movb	(R5), (R2)+
+	inc	(R4)
+	movb	(R5), (R2)+
+	inc	(R4)
+	movb	(R5), (R2)
+	add	R1, (R4)
+	add	R1, R2
+	sob	R3, 20$
+	br	10$
+30$:	; it's a bat
+	mov	#C_SCRWID, R1			; next line addition for bat
+40$:	movb	(R5), (R2)
+	add	R1, (R4)
+	add	R1, R2
+	sob	R3, 40$	
+	br	10$
+99$:	return
+
+
+; clears current portions of fbuf (move coord to second fbuf)
+ClearFBuf:
+	mov	#FBufData, R0			; current fbuf data addr
+	mov	#FBufDataPrev, R5		; previous fbuf data addr
+10$:	mov	(R0)+, R1			; object type
+	mov	(R0)+, R2			; vaddr in screen-2
+	mov	(R0)+, R3			; DY
+	; move coords to prev fbuf
+	mov	R1, (R5)+
+	mov	R2, (R5)+
+	mov	R3, (R5)+
+	tst	R1
+	beq	90$
+	cmp	#1, R1
+	bne	30$
+	mov	#C_SCRWID-2, R1
+20$:	clrb	(R2)+
+	clrb	(R2)+
+	clrb	(R2)
+	add	R1, R2
+	sob	R3, 20$
+	br	10$
+30$:	; bat type
+	mov	#C_SCRWID, R1
+40$:	clrb	(R2)
+	add	R1, R2
+	sob	R3, 40$
+	br	10$
+90$:	clr	FBufData			; reset fbuf data table
+	mov	#FBufData, FBufCur		; and pointer
+	return
+
+
+; draw plane-0 sprite (to second screen)
+; and add framebuf coords
+; R0 - spr #, R1 - X, R2 - Y
+DrawSprite:
+	asl	R0
+	mov	SpritesTable(R0), R0
+	beq	99$
+	movb	(R0)+, R3			; Y addition
+	add	R3, R2				; R2 = actual Y
+	mul	#C_SCRWID, R2			; R3 = Y*C_SCRWID
+	add	#C_VADDR2, R3			; R3 = vaddr in screen-2 without X
+	mov	R1, R2				; R2 = X
+	ash	#-3, R2				; R2 = X/8
+	add	R3, R2				; R2 = (X/8) + (Y*C_SCRWID+C_VADDR2) = vaddr in screen-2
+	bic	#^B1111111111111000, R1		; R1 = X%8 - ash counter
+	movb	(R0)+, R3			; R3 = DY
+	; save fb coords
+	mov	FBufCur, R5
+	mov	#1, (R5)+			; it's a type 1 - sprite 16x16
+	mov	R2, (R5)+			; vaddr in screen-2
+	mov	R3, (R5)+			; DY
+	clr	(R5)
+	mov	R5, FBufCur
+	; bis to fb
+	mov	#177010, R4
+	mov	#177012, R5
+	mov	R2, (R4)			; set vaddr
+10$:	; 1st byte
+	clr	R2
+	bisb	(R0)+, R2
+	ash	R1, R2
+	bis	R2, (R5)
+	swab	R2
+	inc	(R4)
+	bis	R2, (R5)
+	; 2nd byte
+	clr	R2
+	bisb	(R0)+, R2
+	ash	R1, R2
+	bis	R2, (R5)
+	swab	R2
+	inc	(R4)
+	bis	R2, (R5)
+	add	#C_SCRWID-2, (R4)
+	sob	R3, 10$	
+99$:	return
+
+
+; xor plane-0 sprite (to second screen)
+; and add framebuf coords
+; R0 - spr #, R1 - X, R2 - Y
+XorSprite:
+	asl	R0
+	mov	SpritesTable(R0), R0
+	beq	99$
+	movb	(R0)+, R3			; Y addition
+	add	R3, R2				; R2 = actual Y
+	mul	#C_SCRWID, R2			; R3 = Y*C_SCRWID
+	add	#C_VADDR1, R3			; R3 = vaddr in screen-1 without X
+	mov	R1, R2				; R2 = X
+	ash	#-3, R2				; R2 = X/8
+	add	R3, R2				; R2 = (X/8) + (Y*C_SCRWID+C_VADDR1) = vaddr in screen-1
+	bic	#^B1111111111111000, R1		; R1 = X%8 - ash counter
+	movb	(R0)+, R3			; R3 = DY
+	; xor to screen
+	mov	#177010, R4
+	mov	#177012, R5
+	mov	R2, (R4)			; set vaddr
+10$:	; 1st byte
+	clr	R2
+	bisb	(R0)+, R2
+	ash	R1, R2
+	xor	R2, (R5)
+	swab	R2
+	inc	(R4)
+	xor	R2, (R5)
+	; 2nd byte
+	clr	R2
+	bisb	(R0)+, R2
+	ash	R1, R2
+	xor	R2, (R5)
+	swab	R2
+	inc	(R4)
+	xor	R2, (R5)
+	add	#C_SCRWID-2, (R4)
+	sob	R3, 10$	
+99$:	return
+
+
+; draw plane-0 bat
+; R0 - vaddr center, R3 - DY
+DrawBat:
+	; save to fb
+	mov	FBufCur, R5
+	mov	#2, (R5)+			; bat type
+	mov	R3, R1				; BatDY
+	add	#2, R1				; add extra parts DY
+	mov	R1, R2				; R2 = half real DY (without center byte)
+	asl	R2				
+	inc	R2				; R2 = real bat DY
+	mul	#C_SCRWID, R1			; R1 = vaddr subtraction
+	mov	R0, (R5)
+	sub	R1, (R5)+
+	mov	R2, (R5)+
+	clr	(R5)
+	mov	R5, FBufCur
+	; draw it
+	mov	R0, R4
+	mov	R0, R5
+	mov	#^B10111111, R0
+	movb	R0, (R4)
+	mov	#C_SCRWID, R1
+20$:	sub	R1, R4
+	add	R1, R5
+	movb	R0, (R4)
+	movb	R0, (R5)
+	sob	R3, 20$
+	sub	R1, R4
+	add	R1, R5
+	clrb	(R4)
+	clrb	(R5)
+	sub	R1, R4
+	add	R1, R5
+	mov	#^B01011110, R0	
+	movb	R0, (R4)
+	movb	R0, (R5)
+	return
+
+
+; queue command to execute later
+QueueCom:
+	mov	QueueCurrent, R5
+	mov	#PpuCommQue/2, @#177010
+	mov	@#177014, (R5)+			; command
+	mov	R0, (R5)+
+	mov	R1, (R5)+
+	mov	R2, (R5)+
+	mov	R3, (R5)+
+	clr	(R5)
+	cmp	R5, #QueueTableEnd
+	blo	90$
+	jmp	Error
+90$:	mov	R5, QueueCurrent
+	return
+
+
+; execute queued commands
+QueueExec:
+	mov	#QueueTable, R4
+10$:	mov	(R4)+, R5
+	beq	90$
+	mov	(R4)+, R0
+	mov	(R4)+, R1
+	mov	(R4)+, R2
+	mov	(R4)+, R3
+	asl	R5
+	mov	R4, -(SP)
+	call	@CommandsTable(R5)
+	mov	(SP)+, R4
+	br	10$
+90$:	mov	#QueueTable, QueueCurrent
+	clr	QueueTable
+	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Music 
+; //////////////////////////////////////////////////////////////////////////////
+
+@include ppu_music.mac
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Sound
+; //////////////////////////////////////////////////////////////////////////////
+
+SoundAddr:	.word	0
+
+; start sound
+; R0 - sound #
+PlaySound:
+	mtps	#200
+	call	TimerInit
+	asl	R0
+	mov	SoundTable(R0), R0
+	beq	99$
+	clr	R1
+	mov	(R0)+, R1
+	beq	99$
+	mov	R0, SoundAddr
+	mov	R1, @#177712			; load counter
+	tst	@#177714
+	tst	@#177714
+	bic	#200, @#177716			; sound to LO
+	mov	#SoundIntHi, @#304		; set sound interrupt to HI
+	mov	#^B01000001, @#177710		; allow int, start, timer = 4 mks
+						; bits [2 1] 00 - 2, 01 - 4, 10 - 8, 11 - 16
+99$:	mtps	#0
+	return
+
+; sound timer interrupt (LO)
+SoundIntLo:
+	bic	#200, @#177716
+	mov	#SoundIntHi, @#304
+	br	SoundIntNext
+; sound timer interrupt (HI)
+SoundIntHi:
+	bis	#200, @#177716
+	mov	#SoundIntLo, @#304
+SoundIntNext:
+	mov	@SoundAddr, @#177712		; update timer
+	beq	90$				; end of sound?
+	add	#2, SoundAddr
+	tst	@#177714
+	tst	@#177714
+	rti
+90$:	clr	@#177710			; stop timer and ints
+	tst	@#177714
+	tst	@#177714
+	rti
+
+.radix 10
+
+SoundTable:	.word	0, Snd001, Snd002, Snd003, Snd004, Snd005, Snd006, 0, 0, 0
+
+; bat deflection
+Snd001:	.word	216, 184, 192, 184, 184, 192, 184, 192, 176, 200, 176, 208
+	.word	168, 216, 160, 224
+	.word	0
+
+; kub dissolve
+Snd002:	.word	112,112,112,112,112,104,112,104,112,96,112,96,104,88
+	.word	0
+
+; npc 'boom'
+Snd003:	.word	296, 272, 256, 3808,3808,     216, 184, 176,  3960,3960 
+	.word	184, 144, 136, 4040,4040,     128,  80, 112,  4080,4080 
+	.word	384, 352, 320, 3760,3760,     416, 384, 352,  3720,3720 
+	.word	 96,  80,  72, 4090,4090,60,  128, 144, 176,  4060,4060
+	.word	176, 192, 208, 4000,4000,     208, 224, 240,  3960,3960 
+	.word	176, 192, 208, 4000,4000,     128, 144, 176,  4060,4060
+	.word	 96,  80,  72, 4090,4090,      80,  72,  64
+	.word	0  
+
+; power-up
+Snd004:	.word	420, 410, 420, 430, 440, 450, 450, 450, 450, 450, 450, 450
+	.word	450, 440, 430, 430, 430, 420, 420, 420
+	.word	4040, 2020
+	.word	230, 232, 234, 236, 238, 240, 238, 236, 236, 236, 236, 236
+	.word	234, 232, 230, 230, 230, 230, 230, 230, 230, 230, 230, 230
+	.word	230, 230, 230, 230, 230, 230, 230, 230, 230, 230, 230, 230
+	.word	230, 232, 232, 234, 235, 235
+	.word	4040, 2030
+	.word	340, 340, 341, 342, 342, 342, 342, 342, 342, 340, 340, 340
+	.word	340, 340, 341, 342, 342, 342, 342, 342, 342, 340, 340, 340
+	.word	340, 340
+	.word	4040, 2040
+	.word	161, 162, 163, 163, 163, 163, 164, 164, 164, 165, 165, 165
+	.word	165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165
+	.word	165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165
+	.word	165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165
+	.word	165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165, 165
+	.word	0
+
+; kub h-light
+Snd005:	.word	90, 80, 100, 80, 90, 90, 90, 90
+	.word	90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90
+	.word	92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103
+	.word	104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115
+	.word	116, 117, 118, 119, 120, 121, 122
+	.word	0
+
+; simple menu sound
+Snd006:	.word	150, 140, 130, 120, 110, 100, 0
+
+	.even
+.radix 8
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Data
+; //////////////////////////////////////////////////////////////////////////////
+
+QueueCurrent:	.word	QueueTable
+QueueTable:	.blkw	5*20.				; max 20. queued commands
+QueueTableEnd:	.word	0
+
+@include ppu_font.mac
+@include ppu_tiles.mac
+@include ppu_sprites.mac
+
+
+.even
+PpuEnd:
+
+	.end	Start
