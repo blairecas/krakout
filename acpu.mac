@@ -29,6 +29,10 @@ Start:	; clean upper CPU RAM
 	clr	CurrentMode
 	mtps	#0
 
+	; ask PPU check for mouse hardware
+	mov	#C_PPU_MOUTST, R5
+	call	PpuExecute
+
 
 ; main program cycle
 MainCycle:
@@ -138,7 +142,9 @@ MainMenu:
 	call	MusicMute
 	inc	CurrentMode
 	return
-10$:	tst	Key1
+10$:	tst	NoMouse
+	bne	20$
+	tst	Key1
 	beq	20$
 	clr	Key1
 	call	MenuSound
@@ -3638,7 +3644,7 @@ TBAlph:		.byte	64.,0., 63.,3., 63.,6., 63.,9., 62.,12., 62.,15., 61.,18., 60.,21
 		.byte	63.,-6., 63.,-3.
 
 StrUseMouse:	.asciz	"1"<2>":;"<6>"MOUSE"
-StrNoMouse:	.asciz	<2>"0:;NO MOUSE"
+StrNoMouse:	.asciz	<2>"1:;MOUSE"
 Str000:		.asciz	<4>"PRESS "<7>"SPACE"
 Str002:		.asciz	"2"<2>":;"<6>"PALETTE"
 Str003:		.asciz	"3"<2>":;"<6>"SOUND"

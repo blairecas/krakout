@@ -24,9 +24,6 @@ PPMain:	; clean upper PPU RAM (with screen plane 0)
 	mov	#KeyboardInt,  @#300
 	bis	#100, @#177700			; allow keyboard interrupts
 
-	; check for mouse
-	call	MouseTest
-
         ; set 'PPU is ready'
 	mov	#PpuComm/2, @#177010
 	clr	@#177014
@@ -93,6 +90,7 @@ CommandsTable:
 	.word	Pt3Mute			; 17. pt3 mute
 	.word	XorSprite		; 18. xor sprite to screen 1 without fbuf
 	.word	PlaySound		; 19. start playing sound
+	.word	MouseTest		; 20. check for mouse hardware
 
 
 ; //////////////////////////////////////////////////////////////////////////////

@@ -29,6 +29,7 @@ C_PPU_MUSPLAY	= 16.
 C_PPU_MUSMUTE	= 17.
 C_PPU_XORSPR	= 18.
 C_PPU_PLAYSND	= 19.
+C_PPU_MOUTST	= 20.
 
 
 ; game modes
