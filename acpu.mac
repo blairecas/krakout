@@ -15,13 +15,19 @@ Start:	; clean upper CPU RAM
 	sob	R3, .-2
 
 	; clear screen planes 12
-	call	ClearPlanes12
+	call	SetVreg
+	mov	#40000, R3
+	mov	#C_VBUF1, (R4)
+10$:	clr	(R5)
+	inc	(R4)
+	clr	(R5)
+	inc	(R4)
+	sob	R3, 10$
 
 	; set vsync int
 	mov	#VsyInt, @#100
 
 	; prepare tables etc.
-	call	ClearScreen
 	call	FillKVAddrs
 	call	FillAngToDir
 
@@ -111,7 +117,6 @@ MainReset:
 	call	MusicInit
 	mov	#30., MusicDelay		; delay a bit
 	; prepare animations
-	call	FBufReset
 	call	ScrollPrepare
 	call	MenuBallPrepare
 	; next mode
@@ -186,20 +191,23 @@ MainPrepare:
 
 ; 03 - Level prepare
 MainPreLevel:
-	call	ClearScreen
-	call	FBufReset
+	call	ClearScreen			; clear and set buffers 1 2
 	call	LevelIntro			; introduction of level (if any)
 	call	LoadLevel			; load level
 	call	ClearNpc			; clear npc's 
 	call	DefCoords			; default ball and bat coords
 	clr	KeyCurrent			; clear keys just in case
 	call	DrawBackground			; draw some background things (score, level, lives)
+	call	SwitchBuffers			; set as 2 1 (first command in next mode will switch them back)
 	inc	CurrentMode
 	return
 
 
 ; 04 - play Level
 MainLevel:
+	; switch buffers asap after vsync
+	call	SwitchBuffers
+
 	; key UST - pause
 	tst	KeyUst
 	beq	10$
@@ -210,50 +218,31 @@ MainLevel:
 	return
 20$:	; key UST - pause
 
-;	;
-;	; debug info
-;	;
-;	bit	#^B11111, FrameCount		; once in 32. frames
-;	bne	1$
-;	mov	WaitVsync+2, R0
-;	clr	WaitVsync+2
-;	asr	R0				; /=32.
-;	asr	R0
-;	asr	R0
-;	asr	R0
-;	asr	R0
-;	mov	#C_SCRWID*4.+1.+C_VADDR, R1
-;	call	PrintOctalWord
-1$:	; DEBUG: key 1
+	; key 1 - next level
 	tst	Key1
-	beq	2$
+	beq	30$
 	clr	Key1
 	mov	#C_MODE_LEVEND, CurrentMode
-2$:	; key 2 - game over
+30$:	; key 2 - game over
 	tst	Key2
-	beq	3$
+	beq	32$
 	clr	Key2
 	mov	#C_MODE_OVER, CurrentMode
-3$:	; key 3 - max level
+32$:	; key 3 - max level
 	tst	Key3
-	beq	4$
+	beq	34$
 	clr	Key3
 	mov	#C_LEVEL_MAX-1, Level
 	mov	#C_MODE_LEVEND, CurrentMode
-4$:	; end debug info
-	;
+34$:	; end keys
 
-	; queue sprites for drawing in PPU
+	; queue/run clear old and drawing new sprites on second screen
+	call	FbufClear
 	call	DrawNpc
 	call	DrawBat
 	call	DrawBossBat
 	call	DrawBall
-	call	QueueFBDraw
-	call	QueueFBClear
 	call	RunQueue
-	; sound & print
-	call	ProcessSound			; (maybe) sound effect	
-	call	PrintScore			; (maybe) draw score
 	; logic
 	call	TestLevelEnd			; test for level end
 	call	LostDo				; lost state processing
@@ -263,6 +252,9 @@ MainLevel:
 	call	NpcSpa				; spawn npc
 	call	BallDo				; process ball moving
 	call	KeffProcess			; change background
+	; and last one - sound & print score
+	call	ProcessSound			; (maybe) sound effect	
+	call	PrintScore			; (maybe) draw score
 	return
 
 
@@ -368,17 +360,6 @@ SetVreg:
 	return
 
 
-; clear screen planes 1,2
-ClearPlanes12:
-	call	SetVreg
-	mov	#40000, R3
-	mov	#C_VBUF1, (R4)
-10$:	clr	(R5)
-	inc	(R4)
-	sob	R3, 10$
-	return
-
-
 ; Galois LFSR 8-bit
 Galois8bit:
 	clc
@@ -452,6 +433,22 @@ SetPalette:
 	return
 
 
+; switch screen buffers
+SwitchBuffers:
+	cmp	CurrentVaddr1, #C_VADDR1
+	bne	10$
+	mov	#C_VADDR2, CurrentVaddr1
+	mov	#C_VADDR1, CurrentVaddr2
+	br	90$
+10$:	mov	#C_VADDR1, CurrentVaddr1
+	mov	#C_VADDR2, CurrentVaddr2
+90$:	mov	CurrentVaddr1, R1
+	mov	CurrentVaddr2, R2
+	mov	#C_PPU_SWITCHB, R5
+	call	PpuExecute
+	return
+
+
 ; //////////////////////////////////////////////////////////////////////////////
 ; // Drawing
 ; //////////////////////////////////////////////////////////////////////////////
@@ -459,7 +456,7 @@ SetPalette:
 ; return R0 - vram from kub s-addr (vaddr without 100000 addition!)
 VramFromKSaddr:
 	mov	R0, R1
-	bic	#^B1111111100001111, R1			; Y * 16
+	bic	#^B1111111100001111, R1		; Y * 16
 	mul	#C_SCRWID, R1
 	bic	#^B1111111111110000, R0
 	asl	R0
@@ -467,24 +464,29 @@ VramFromKSaddr:
 	return
 
 
-; reset fbuf
-FBufReset:
-	mov	#C_PPU_RESEFBUF, R5
-	jmp	PpuExecute
-
-
 ; clear screen by random placing kubs
 ClearScreen:
+	; set buffers as 1 2
+	mov	#C_VADDR2, CurrentVaddr1	; set as 2 1
+	call	SwitchBuffers			; switch to 1 2
+	; ask PPU to reset fbuf-s
+	mov	#C_PPU_RESEFBUF, R5
+	call	PpuExecute
 	; clear second screen - ppu
-	tst	PpuComm
-	bne	.-4
-	mov	#C_PPU_CLEARSC2, PpuComm
+	mov	#C_PPU_CLEARSC2, R5
+	call	PpuExecute
 	; clear second screen - cpu
 	call	SetVreg
-	mov	#C_VBUF2, (R4)
-	mov	#C_SCRSIZE, R3
-10$:	clr	(R5)
+	mov	CurrentVaddr2, (R4)
+	mov	#256., R3
+	mov	#C_SCRWID-32., R1
+10$:	mov	#16., R2
+20$:	clr	(R5)
 	inc	(R4)
+	clr	(R5)
+	inc	(R4)
+	sob	R2, 20$
+	add	R1, (R4)
 	sob	R3, 10$
 	; and duplicate it
 
@@ -503,8 +505,8 @@ DuplicateScreen:
 	mov	#C_PPU_COPYKUB2, PpuComm	; ask PPU to copy kub
 	call	VramFromKSaddr
 	mov	R0, R1
-	add	#C_VADDR1, R0
-	add	#C_VADDR2, R1
+	add	CurrentVaddr1, R0
+	add	CurrentVaddr2, R1
 	mov	#16., R3
 60$:	mov	R1, (R4)
 	mov	(R5), R2
@@ -532,7 +534,7 @@ PrintOctal:
 ; R5 - vaddr
 ; codes in string - [0..7] - change color
 PrintStr:
-	mov	R5, R1					; PPU use R1 as vaddr
+	mov	R5, R1				; PPU use R1 as vaddr
 	mov	#C_PPU_PRINTSTR, R5
 	call	PpuExecute
 	return 
@@ -577,7 +579,7 @@ PrintDecimal2:
 	jmp	PrintDecimalX
 
 
-; draw sprite to screen-2 (with fbuf)
+; bis sprite to screen-2
 ; R1 - X (0..255), R2 - Y (0..255), R0 - sprite ID
 DrawSprite:
 	tst	PpuComm
@@ -613,17 +615,8 @@ QueueSprite:
 	return
 
 
-; queue framebuffer draw
-QueueFBDraw:
-	tst	PpuComm
-	bne	.-4
-	mov	#C_PPU_DRAWFBUF, PpuCommQue
-	mov	#C_PPU_QUEUECOM, PpuComm
-	return
-
-
 ; queue framebuffer clear
-QueueFBClear:
+FbufClear:
 	tst	PpuComm
 	bne	.-4
 	mov	#C_PPU_CLEAFBUF, PpuCommQue
@@ -631,17 +624,13 @@ QueueFBClear:
 	return
 
 
-; draw one block R5 - k-addr
-; do not modify R3, R4, R5 (!)
-; draw to screen-1
-DrawKTileR0:
-	mov	#C_VADDR1, DrawKTileBA+2
-	br	DrawKTileR0Go
-DrawKTile2:
-	mov	#C_VADDR2, DrawKTileBA+2
+; draw 4-color tile block to screen-2
+; R5 - k-addr
+; (!) do not modify R3, R4, R5 (!)
+DrawKTile:
 	movb	LevelC(R5), R0	
+DrawKTileR0:
 	bic	#^B1111111111000000, R0		; remove 'block power' bits
-DrawKTileR0Go:
 	swab	R0
 	asr	R0
 	asr	R0				; R0 = tile# * 64.
@@ -650,8 +639,7 @@ DrawKTileR0Go:
 	mov	R5, R1
 	asl	R1
 	mov	KAddr2Vaddr(R1), R2		; vaddr without base
-DrawKTileBA:
-	add	#C_VADDR1, R2			; add base
+	add	CurrentVaddr2, R2		; add base
 	; draw it
 	mov	#176640, R1
 	mov	R2, (R1)
@@ -665,7 +653,8 @@ DrawKTileBA:
 	return
 
 
-; draw tile, R0 = tile #, R5 - vaddr
+; draw 8-color tile to screen-1
+; R0 = tile #, R5 - vaddr
 DrawTile:
 	; also draw in PPU
 	tst	PpuComm
@@ -693,7 +682,7 @@ DrawTile:
 	return
 
 
-; bat draw
+; bat draw queue 
 DrawBat:
 	tst	BatDY
 	bhi	10$
@@ -704,7 +693,8 @@ DrawBat:
 	swab	R1
 	add	#C_FIELD_Y, R1
 	mul	#C_SCRWID, R1
-	add	#C_BATX_WORD+C_VADDR2, R1
+	add	#C_BATX_WORD, R1
+	add	CurrentVaddr2, R1
 	tst	PpuComm
 	bne	.-4
 	mov	R1, PpuCommR0			; vaddr (screen 2)
@@ -742,7 +732,8 @@ DrawBossBat:
 	swab	R1
 	add	#C_FIELD_Y, R1
 	mul	#C_SCRWID, R1
-	add	#C_BATBOSSX_WORD+C_VADDR2, R1
+	add	#C_BATBOSSX_WORD, R1
+	add	CurrentVaddr2, R1
 	tst	PpuComm
 	bne	.-4
 	mov	R1, PpuCommR0
@@ -759,7 +750,7 @@ DrawBackground:
 	beq	80$
 	; draw tiles
 	mov	#191., R5
-60$:	call	DrawKTile2
+60$:	call	DrawKTile
 	dec	R5
 	bpl	60$
 80$:	; print strings
@@ -838,10 +829,7 @@ MenuBallProc:
 	movb	MenuBallYTbl(R0), R0
 	add	R0, R2
 	clr	R0
-	call	DrawSprite
-	mov	#C_PPU_DRAWFBUF, R5
-	call	PpuExecute
-	mov	#C_PPU_CLEAFBUF, R5
+	mov	#C_PPU_MOVSPR, R5
 	call	PpuExecute
 	; movements
 	tstb	MenuBallDir
@@ -1328,13 +1316,16 @@ DefCoords:
 	return
 
 
-; draw score
+; draw score (on both screens)
 PrintScore:	
 	tstb	ScoreChanged			; do we need to redraw?
 	beq	99$
 	clrb	ScoreChanged
 	mov	Score, R0
 	mov	#16.*C_SCRWID+7.+C_VADDR1, R5
+	call	PrintDecimal5
+	mov	Score, R0
+	mov	#16.*C_SCRWID+7.+C_VADDR2, R5
 	call	PrintDecimal5
 99$:	return
 
@@ -3146,6 +3137,9 @@ MenuSound:
 
 .radix 10	; RADIX 10 (!) RADIX 10 (!) RADIX 10 (!)
 
+CurrentVaddr1:	.word	0
+CurrentVaddr2:	.word	0
+
 Pause:		.word	0
 CurrentMode:	.word	0
 FrameCount:	.word	0
@@ -3212,7 +3206,7 @@ NpcTbl:		.blkw	100			; 10 objects by 10 words
 NpcTbe:
 
 ; kub effects tables
-KeffTblLight:	.byte	38., 38., 38., 38., 39., 39., 39., 39., -1, -1, 0
+KeffTblLight:	.byte	38., 38., 38., 38., -1, -1, 0
 KeffTblPower:	.byte	40., 40., 41., 41., 42., 42., 43., 43., 44., 44., 45., 45., 46., 46., -1, -1, 0
 KeffTblDisso:	.byte	30., 30., 31., 31., 32., 32., 33., 33., 34., 34., 35., 35., 36., 36., 37., 37., -1, -1, 0
 		.even

@@ -79,18 +79,18 @@ CommandsTable:
 	.word	DrawTile		; 06. draw tile
 	.word	DrawSprite		; 07. draw plane-0 sprite
 	.word	ResetFBuf		; 08. clears and resets fbuf
-	.word	DrawFBuf		; 09. copy fbuf to screen-1
-	.word	ClearFBuf		; 10. clears current portions of fbuf
-	.word	DrawBat			; 11. draws the bat
-	.word	QueueCom		; 12. queue PPU command
-	.word	Error			; i don't like number 13 ^_^
-	.word	QueueExec		; 14. execute queue
-	.word	Pt3Init			; 15. pt3 player init
-	.word	Pt3Play			; 16. pt3 play one tick
-	.word	Pt3Mute			; 17. pt3 mute
-	.word	XorSprite		; 18. xor sprite to screen 1 without fbuf
-	.word	PlaySound		; 19. start playing sound
-	.word	MouseTest		; 20. check for mouse hardware
+	.word	ClearFBuf		; 09. clears current portions of fbuf
+	.word	DrawBat			; 10. draws the bat
+	.word	QueueCom		; 11. queue PPU command
+	.word	QueueExec		; 12. execute queue
+	.word	Pt3Init			; 13. pt3 player init
+	.word	Pt3Play			; 14. pt3 play one tick
+	.word	Pt3Mute			; 15. pt3 mute
+	.word	XorSprite		; 16. xor sprite to screen 1 without fbuf
+	.word	PlaySound		; 17. start playing sound
+	.word	MouseTest		; 18. check for mouse hardware
+	.word	SwitchBuffers		; 19. switch drawing buffers (and fbufs)
+	.word	MovSprite		; 20. mov sprite to screen 1 without fbuf
 
 
 ; //////////////////////////////////////////////////////////////////////////////
@@ -321,7 +321,7 @@ PrintStr:
 ; // Mouse
 ; //////////////////////////////////////////////////////////////////////////////
 
-PpuNoMouse:	.word	0
+PpuNoMouse:	.word	1
 PpuMouseX:	.word	0
 PpuMouseY:	.word	0
 PpuMouseBtn:	.word	0
@@ -401,11 +401,14 @@ UpdWaitCycles:
 
 ; clear second screen
 ClearScreen2:
-	call	SetVreg
-	mov	#C_VADDR2, (R4)
-	mov	#C_SCRSIZE, R3
-10$:	clr	(R5)
-	inc	(R4)
+	mov	#C_VADDR2, R5
+	mov	#288., R3
+	mov	#C_SCRWID/2, R1
+10$:	mov	#10., R2
+20$:	clr	(R5)+
+	clr	(R5)+
+	sob	R2, 20$
+	add	R1, R5
 	sob	R3, 10$
 	return
 
@@ -456,71 +459,65 @@ DrawTile:
 
 
 ; framebuffer data
+FBufBase:	.word	0
 FBufCur:	.word	0
-FBufDataPrev:	.blkw	3*C_MAX_ONSCRSPR	; previous screen fbuf coords
-FBufData:	.blkw	3*C_MAX_ONSCRSPR	; [type, vaddr scr2, dy] type: 1-spr16, 2-bat
+FBufData1:	.blkw	3*C_MAX_ONSCRSPR	; previous screen fbuf coords
+FBufData2:	.blkw	3*C_MAX_ONSCRSPR	; [type, vaddr scr2, dy] type: 1-spr16, 2-bat
 FBufDataEnd:
 
 ; reset framebuffer
 ResetFBuf:
-	call	ClearScreen2
-	mov	#FBufDataPrev, R0
-	mov	#FBufDataEnd-FBufDataPrev/2, R3
+	mov	#FBufData1, R0
+	mov	#FBufDataEnd-FBufData1/2, R3
 	clr	(R0)+
 	sob	R3, .-2
-	mov	#FBufData, FBufCur
+	mov	#FBufData2, FBufCur
 	return
 
 ; copy framebuffer to screen-1
-DrawFBuf:
-	mov	#177010, R4			; set vregs
-	mov	#177012, R5
-	mov	#FBufDataPrev, R0		; previous fbuf data addr
-	call	10$				; draw previous
-	mov	#FBufData, R0			; current fbuf data addr
-10$:	mov	(R0)+, R1			; object type
-	beq	99$
-	mov	(R0)+, R2			; vaddr in screen-2
-	mov	(R0)+, R3			; DY
-	; move it to screen-1
-	mov	R2, (R4)			; vaddr in screen-2
-	sub	#C_VADDR2-C_VADDR1, R2		; vaddr in screen-1
-	; is it a sprite 16x16?
-	cmp	R1, #1
-	bne	30$
-	mov	#C_SCRWID-2, R1			; next line addition
-20$:	movb	(R5), (R2)+
-	inc	(R4)
-	movb	(R5), (R2)+
-	inc	(R4)
-	movb	(R5), (R2)
-	add	R1, (R4)
-	add	R1, R2
-	sob	R3, 20$
-	br	10$
-30$:	; it's a bat
-	mov	#C_SCRWID, R1			; next line addition for bat
-40$:	movb	(R5), (R2)
-	add	R1, (R4)
-	add	R1, R2
-	sob	R3, 40$	
-	br	10$
-99$:	return
+;DrawFBuf:
+;	mov	#177010, R4			; set vregs
+;	mov	#177012, R5
+;	mov	#FBufData, R0			; previous fbuf data addr
+;	call	10$				; draw previous
+;	mov	#FBufDataPrev, R0			; current fbuf data addr
+;10$:	mov	(R0)+, R1			; object type
+;	beq	99$
+;	mov	(R0)+, R2			; vaddr in screen-2
+;	mov	(R0)+, R3			; DY
+;	; move it to screen-1
+;	mov	R2, (R4)			; vaddr in screen-2
+;	sub	#C_VADDR2-C_VADDR1, R2		; vaddr in screen-1
+;	; is it a sprite 16x16?
+;	cmp	R1, #1
+;	bne	30$
+;	mov	#C_SCRWID-2, R1			; next line addition
+;20$:	movb	(R5), (R2)+
+;	inc	(R4)
+;	movb	(R5), (R2)+
+;	inc	(R4)
+;	movb	(R5), (R2)
+;	add	R1, (R4)
+;	add	R1, R2
+;	sob	R3, 20$
+;	br	10$
+;30$:	; it's a bat
+;	mov	#C_SCRWID, R1			; next line addition for bat
+;40$:	movb	(R5), (R2)
+;	add	R1, (R4)
+;	add	R1, R2
+;	sob	R3, 40$	
+;	br	10$
+;99$:	return
 
 
-; clears current portions of fbuf (move coord to second fbuf)
+; clears current portions of fbuf
 ClearFBuf:
-	mov	#FBufData, R0			; current fbuf data addr
-	mov	#FBufDataPrev, R5		; previous fbuf data addr
+	mov	FBufBase, R0			; current fbuf base data addr (it's for screen-2)
 10$:	mov	(R0)+, R1			; object type
+	beq	90$
 	mov	(R0)+, R2			; vaddr in screen-2
 	mov	(R0)+, R3			; DY
-	; move coords to prev fbuf
-	mov	R1, (R5)+
-	mov	R2, (R5)+
-	mov	R3, (R5)+
-	tst	R1
-	beq	90$
 	cmp	#1, R1
 	bne	30$
 	mov	#C_SCRWID-2, R1
@@ -536,8 +533,8 @@ ClearFBuf:
 	add	R1, R2
 	sob	R3, 40$
 	br	10$
-90$:	clr	FBufData			; reset fbuf data table
-	mov	#FBufData, FBufCur		; and pointer
+90$:	clr	@FBufBase			; mark as empty
+	mov	FBufBase, FBufCur		; set pointer to beginning
 	return
 
 
@@ -551,7 +548,7 @@ DrawSprite:
 	movb	(R0)+, R3			; Y addition
 	add	R3, R2				; R2 = actual Y
 	mul	#C_SCRWID, R2			; R3 = Y*C_SCRWID
-	add	#C_VADDR2, R3			; R3 = vaddr in screen-2 without X
+	add	CurrentVaddr2, R3		; R3 = vaddr in screen-2 without X
 	mov	R1, R2				; R2 = X
 	ash	#-3, R2				; R2 = X/8
 	add	R3, R2				; R2 = (X/8) + (Y*C_SCRWID+C_VADDR2) = vaddr in screen-2
@@ -589,13 +586,8 @@ DrawSprite:
 99$:	return
 
 
-; xor plane-0 sprite (to second screen)
-; and add framebuf coords
-; R0 - spr #, R1 - X, R2 - Y
-XorSprite:
-	asl	R0
-	mov	SpritesTable(R0), R0
-	beq	99$
+; addrs preparations for two next procedures
+XorMovPrep:
 	movb	(R0)+, R3			; Y addition
 	add	R3, R2				; R2 = actual Y
 	mul	#C_SCRWID, R2			; R3 = Y*C_SCRWID
@@ -609,6 +601,16 @@ XorSprite:
 	mov	#177010, R4
 	mov	#177012, R5
 	mov	R2, (R4)			; set vaddr
+	return
+
+
+; xor sprite (to first screen buf)
+; R0 - spr #, R1 - X, R2 - Y
+XorSprite:
+	asl	R0
+	mov	SpritesTable(R0), R0
+	beq	99$
+	call	XorMovPrep
 10$:	; 1st byte
 	clr	R2
 	bisb	(R0)+, R2
@@ -627,6 +629,59 @@ XorSprite:
 	xor	R2, (R5)
 	add	#C_SCRWID-2, (R4)
 	sob	R3, 10$	
+99$:	return
+
+
+; mov sprite (to first screen buf) with 2 empty lines top and bottom
+; R0 - spr #, R1 - X, R2 - Y
+MovSprite:
+	asl	R0
+	mov	SpritesTable(R0), R0
+	beq	99$
+	call	XorMovPrep
+	; top 2 empty lines
+	clr	(R5)
+	inc	(R4)
+	clr	(R5)
+	inc	(R4)
+	clr	(R5)
+	add	#C_SCRWID-2, (R4)
+	clr	(R5)
+	inc	(R4)
+	clr	(R5)
+	inc	(R4)
+	clr	(R5)
+	add	#C_SCRWID-2, (R4)
+10$:	; 1st byte
+	clr	R2
+	bisb	(R0)+, R2
+	ash	R1, R2
+	mov	R2, (R5)
+	swab	R2
+	inc	(R4)
+	mov	R2, (R5)
+	; 2nd byte
+	clr	R2
+	bisb	(R0)+, R2
+	ash	R1, R2
+	bis	R2, (R5)
+	swab	R2
+	inc	(R4)
+	mov	R2, (R5)
+	add	#C_SCRWID-2, (R4)
+	sob	R3, 10$	
+	; bottom 2 empty lines
+	clr	(R5)
+	inc	(R4)
+	clr	(R5)
+	inc	(R4)
+	clr	(R5)
+	add	#C_SCRWID-2, (R4)
+	clr	(R5)
+	inc	(R4)
+	clr	(R5)
+	inc	(R4)
+	clr	(R5)
 99$:	return
 
 
@@ -703,6 +758,27 @@ QueueExec:
 	br	10$
 90$:	mov	#QueueTable, QueueCurrent
 	clr	QueueTable
+	return
+
+
+; switch screen buffers and fbuf pointers
+; R1 - vaddr1, R2 - vaddr2
+SwitchBuffers:
+	cmp	R1, #C_VADDR1
+	bne	50$
+	; now we are 1 2
+	mov	#C_VADDR1, CurrentVaddr1
+	mov	#C_VADDR2, CurrentVaddr2
+	mov	#FBufData2, FBufBase
+	mov	#FBufData2, FBufCur
+	mov	#VLines1, @#VLinesBase
+	return
+50$:	; at 2 1
+	mov	#C_VADDR2, CurrentVaddr1
+	mov	#C_VADDR1, CurrentVaddr2
+	mov	#FBufData1, FBufBase
+	mov	#FBufData1, FBufCur
+	mov	#VLines2, @#VLinesBase
 	return
 
 
@@ -822,6 +898,9 @@ Snd006:	.word	150, 140, 130, 120, 110, 100, 0
 ; //////////////////////////////////////////////////////////////////////////////
 ; // Data
 ; //////////////////////////////////////////////////////////////////////////////
+
+CurrentVaddr1:	.word	0
+CurrentVaddr2:	.word	0
 
 QueueCurrent:	.word	QueueTable
 QueueTable:	.blkw	5*20.			; max 20. queued commands
