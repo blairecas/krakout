@@ -91,6 +91,7 @@ CommandsTable:
 	.word	MouseTest		; 18. check for mouse hardware
 	.word	SwitchBuffers		; 19. switch drawing buffers (and fbufs)
 	.word	MovSprite		; 20. mov sprite to screen 1 without fbuf
+	.word	MouseSetCoords		; 21. set mouse Y and clear button
 
 
 ; //////////////////////////////////////////////////////////////////////////////
@@ -368,14 +369,27 @@ MouseProc:
 	ble	28$
 	mov	#173.-8., PpuMouseY
 28$:	; write coords to CPU
-;	mov	#MouseY/2, @#177010
-;	mov	PpuMouseY, @#177014
+	mov	#MouseY/2, @#177010
+	mov	PpuMouseY, @#177014
 	; click write only if it happens
 	cmp	R2, R3
 	beq	99$
-	mov	#KeySpace/2, @#177010
+	mov	#MouseBtn/2, @#177010
 	mov	PpuMouseBtn, @#177014
 99$:	return
+
+
+; set mouse coords and clear button
+; R0 - Y
+MouseSetCoords:
+	bic	#^B1111111100000000, R0
+	mov	R0, PpuMouseY
+	clr	PpuMouseBtn
+	mov	#MouseY/2, @#177010
+	mov	PpuMouseY, @#177014
+	mov	#MouseBtn/2, @#177010
+	clr	@#177014
+	return
 
 
 ; //////////////////////////////////////////////////////////////////////////////

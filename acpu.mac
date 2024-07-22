@@ -153,7 +153,7 @@ MainMenu:
 	beq	20$
 	clr	Key1
 	call	MenuSound
-	com	UseMouse
+	comb	UseMouse
 	jmp	PrintMenuMouse
 20$:	tst	Key2
 	beq	30$
@@ -784,7 +784,7 @@ PrintOnOff:
 
 
 PrintMenuMouse:
-	mov	UseMouse, R0
+	movb	UseMouse, R0
 	mov	#C_MENUY+10.*C_SCRWID+18.+C_VADDR1, R5
 	br	PrintOnOff
 
@@ -1298,13 +1298,23 @@ DefCoords:
 	clr	BatSub				; submode
 	clr	BatPRZ				; paralyzation counter
 	call	BatVelInit			; init bat velocities
-	; boss bat
-	tstb	BossFight
+	; have mouse?
+	tst	NoMouse
+	bne	10$
+	tstb	UseMouse
 	beq	10$
+	mov	BatY, R0
+	clrb	R0
+	swab	R0
+	mov	#C_PPU_MOUSETCOR, R5
+	call	PpuExecute
+10$:	; boss bat
+	tstb	BossFight
+	beq	50$
 	mov	BatY, BatBossY
 	sub	#256., BatBossY			; correct a bit
 	mov	#8., BatBossDY
-10$:	; ball
+50$:	; ball
 	mov	#60., BallAngle			; angle to the left and a bit down
 	mov	#C_BALLVEL_MIN, BallVel
 	mov	#12., BallBat			; position in a bat
@@ -1823,7 +1833,21 @@ BatKeys:
 	beq	10$
 	dec	BatPrz
 	return
-10$:	; keyboard actions
+10$:	; do we have mouse?
+	tst	NoMouse
+	bne	40$
+	tstb	UseMouse
+	beq	40$
+	; ok - use mouse then
+	mov	MouseBtn, KeySpace
+	mov	MouseY, R0
+	; add	#C_FIELD_Y, R0
+	swab	R0
+	clrb	R0
+	mov	R0, BatY
+	call	BatCorrect
+	br	BatVelInit
+40$:	; keyboard actions
 	mov	KeyUp, R0
 	add	KeyDown, R0
 	beq	BatVelInit			; nothing pressed - reinit velocities
@@ -3144,7 +3168,6 @@ Pause:		.word	0
 CurrentMode:	.word	0
 FrameCount:	.word	0
 Palette:	.word	0			; default must be GRB
-UseMouse:	.word	0
 
 Level:		.word	0
 Lives:		.word	20
@@ -3155,12 +3178,12 @@ SpawnSpeed:	.word	100			; npc spawn speed
 BossFight:	.byte	0
 YouWin:		.byte	0
 
+UseMouse:	.byte	0			; are we using mouse
 RightWall:	.byte	0			; right wall presence
 LostCounter:	.byte	0			; are we dying? (counter 1..150 or so)
 ScoreChanged:	.byte	0			; 1 - need redraw score
 BallSuper:	.byte	0
 BallSuperCnt:	.byte	0
-		.even
 
 TempX:		.word	0
 TempY:		.word	0
