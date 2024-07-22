@@ -39,6 +39,9 @@ Start:	; clean upper CPU RAM
 	mov	#C_PPU_MOUTST, R5
 	call	PpuExecute
 
+	; set buffers 1 2
+	call	SetBuffers12
+
 
 ; main program cycle
 MainCycle:
@@ -207,6 +210,21 @@ MainPreLevel:
 MainLevel:
 	; switch buffers asap after vsync
 	call	SwitchBuffers
+
+;	; DEBUG
+;	bit	#^B11111, FrameCount		; once in 32 frames
+;	bne	1$
+;	tst	PpuComm
+;	bne	.-4
+;	mov	#C_PPU_WAITUPD, PpuComm
+;	tst	PpuComm
+;	bne	.-4
+;	mov	PpuWaitCount, R0
+;	ash	#-5., R0
+;	mov	CurrentVaddr1, R1
+;	sub	#2.*C_SCRWID, R1
+;	call	PrintOctalWord
+;1$:	; DEBUG
 
 	; key UST - pause
 	tst	KeyUst
@@ -449,6 +467,13 @@ SwitchBuffers:
 	return
 
 
+; sets buffers as 1 2
+SetBuffers12:
+	mov	#C_VADDR2, CurrentVaddr1	; set as 2 1
+	call	SwitchBuffers			; switch to 1 2
+	return
+
+
 ; //////////////////////////////////////////////////////////////////////////////
 ; // Drawing
 ; //////////////////////////////////////////////////////////////////////////////
@@ -467,8 +492,7 @@ VramFromKSaddr:
 ; clear screen by random placing kubs
 ClearScreen:
 	; set buffers as 1 2
-	mov	#C_VADDR2, CurrentVaddr1	; set as 2 1
-	call	SwitchBuffers			; switch to 1 2
+	call	SetBuffers12
 	; ask PPU to reset fbuf-s
 	mov	#C_PPU_RESEFBUF, R5
 	call	PpuExecute
@@ -524,8 +548,119 @@ DuplicateScreen:
 	return
 
 
+; 4x5 numbers (aligned by 8 bytes)
+SprNumbers45:
+	.byte	7,5,5,5,7,0,0,0, 2,2,2,2,2,0,0,0
+	.byte	7,4,7,1,7,0,0,0, 7,4,6,4,7,0,0,0
+	.byte	5,5,7,4,4,0,0,0, 7,1,7,4,7,0,0,0
+	.byte	7,1,7,5,7,0,0,0, 7,4,4,4,4,0,0,0
+	.byte	7,5,7,5,7,0,0,0, 7,5,7,4,7,0,0,0
+	; shifted by 4 bit
+	.byte	160,120,120,120,160,0,0,0, 040,040,040,040,040,0,0,0
+	.byte	160,100,160,020,160,0,0,0, 160,100,140,100,160,0,0,0
+	.byte	120,120,160,100,100,0,0,0, 160,020,160,100,160,0,0,0
+	.byte	160,020,160,120,160,0,0,0, 160,100,100,100,100,0,0,0
+	.byte	160,120,160,120,160,0,0,0, 160,120,160,100,160,0,0,0
+
+; print binary word (4x5 font), R0-word, R1-vram addr
+PrintBinaryWord:
+	mov	#176640, R4
+	mov	#176642, R5
+	mov	R1, (R4)
+	mov	#C_SCRWID, R2
+	mov	#8., R3
+20$:	; first half of 8-pixels
+	mov	#SprNumbers45, R1		; sprite 0
+	asl	R0
+	bcc	30$
+	add	#8., R1				; sprite 1
+30$:	movb	(R1)+, (R5)			; using only plane 1
+	add	R2, (R4)
+	movb	(R1)+, (R5)
+	add	R2, (R4)
+	movb	(R1)+, (R5)
+	add	R2, (R4)
+	movb	(R1)+, (R5)
+	add	R2, (R4)
+	movb	(R1)+, (R5)
+	sub	#C_SCRWID*4, (R4)		; rewind vaddr
+	; second half - shifted sprites and BIS
+	mov	#<SprNumbers45+80.>, R1
+	asl	R0
+	bcc	40$
+	add	#8., R1
+40$:	bisb	(R1)+, (R5)
+	add	R2, (R4)
+	bisb	(R1)+, (R5)
+	add	R2, (R4)
+	bisb	(R1)+, (R5)
+	add	R2, (R4)
+	bisb	(R1)+, (R5)
+	add	R2, (R4)
+	bisb	(R1)+, (R5)
+	sub	#C_SCRWID*4-1, (R4)		; .. and advance vaddr
+	sob	R3, 20$
+	return	
+ 
 ; print octal word (4x5 font), R0 - word, R1-vram addr
-PrintOctal:
+PrintOctalWord:
+	mov	#176640, R4
+	mov	#176642, R5
+	mov	R1, (R4)
+	mov	#C_SCRWID, R2
+	mov	#3., R3
+	; 1st bit
+	clr	R1
+	br	22$
+20$:	; first half of 8-pixels
+	clr	R1
+	asl	R0
+	rol	R1
+	asl	R0
+	rol	R1
+22$:	asl	R0
+	rol	R1	
+	; get normal spr addr
+	asl	R1
+	asl	R1
+	asl	R1
+	add	#SprNumbers45, R1
+	; put bits
+	movb	(R1)+, (R5)
+	add	R2, (R4)
+	movb	(R1)+, (R5)
+	add	R2, (R4)
+	movb	(R1)+, (R5)
+	add	R2, (R4)
+	movb	(R1)+, (R5)
+	add	R2, (R4)
+	movb	(R1)+, (R5)
+	sub	#C_SCRWID*4, (R4)
+	; second half - shifted sprites and BIS
+	clr	R1
+	asl	R0
+	rol	R1
+	asl	R0
+	rol	R1
+	asl	R0
+	rol	R1
+	; get shifted spr adr
+	asl	R1
+	asl	R1
+	asl	R1
+	add	#<SprNumbers45+80.>, R1
+	; put bits
+	bisb	(R1)+, (R5)
+	add	R2, (R4)
+	bisb	(R1)+, (R5)
+	add	R2, (R4)
+	bisb	(R1)+, (R5)
+	add	R2, (R4)
+	bisb	(R1)+, (R5)
+	add	R2, (R4)
+	bisb	(R1)+, (R5)
+	sub	#C_SCRWID*4-1, (R4)		; advance vaddr to next byte
+	sob	R3, 20$
 	return	 
 
 
