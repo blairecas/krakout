@@ -120,7 +120,7 @@ MainReset:
 	call	ScrollPrepare
 	call	MenuBallPrepare
 	; next mode
-	clr	KeyCurrent
+	clr	KeySpace
 	inc	CurrentMode
 	return
 100$:	; draw line of tiles from R2 (R3 times)
