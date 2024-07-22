@@ -3229,7 +3229,7 @@ NpcTbl:		.blkw	100			; 10 objects by 10 words
 NpcTbe:
 
 ; kub effects tables
-KeffTblLight:	.byte	38., 38., 38., 38., -1, -1, 0
+KeffTblLight:	.byte	38., 38., 38., 38., 38., 38., -1, -1, 0
 KeffTblPower:	.byte	40., 40., 41., 41., 42., 42., 43., 43., 44., 44., 45., 45., 46., 46., -1, -1, 0
 KeffTblDisso:	.byte	30., 30., 31., 31., 32., 32., 33., 33., 34., 34., 35., 35., 36., 36., 37., 37., -1, -1, 0
 		.even

@@ -83,7 +83,7 @@ PpuLoaderStart:
 	clr	R0
 	call	@7132(R0)			; stop FD
 	mov	#361, @#177054			; set ROM banks as VRAM
-	; relocate code to the top of RAM
+	; relocate code to the top of RAM and run
 	mov	PC, R0
 	add	#PpuLoaderUnp-., R0
 	mov	#PP_LOADER_ADDR, R1
@@ -94,8 +94,8 @@ PpuLoaderStart:
 	
 ; unpack CPU RAM -> PPU RAM and run
 PpuLoaderUnp:
-	mov	#PpuData, R0			; source cpu addr
-	clr	R1				; dest ppu addr
+	mov	#PpuData, R0			; source CPU addr
+	clr	R1				; dest PPU addr
 	mov	#PP_LOADER_ADDR, SP
 	call	UnpR12
 	mov	#1000, SP

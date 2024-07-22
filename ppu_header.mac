@@ -26,8 +26,8 @@ Start:	mtps	#200			; 001000-001004
 	jmp	PPMain			; 001004-001010
 
 VLinesBase = 1126
-VLines1 = 1130
-VLines2 = 3334
+VLines1 = 001130
+VLines2 = 003334
 
 ; 001010 - lines table begin
 VLinesBegin:				; GRB by default
