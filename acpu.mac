@@ -51,7 +51,6 @@ MainCycle:
 	tst	KeyStop
 	beq	10$
 	clr	KeyStop			; release STOP
-	clr	Pause			; unpause
 	clr	CurrentMode		; reset mode
 10$:	; run procedures
 	mov	CurrentMode, R0
@@ -124,6 +123,8 @@ MainReset:
 	call	MenuBallPrepare
 	; next mode
 	clr	KeySpace
+	clr	KeyStop
+	clr	KeyUst
 	inc	CurrentMode
 	return
 100$:	; draw line of tiles from R2 (R3 times)
@@ -228,11 +229,11 @@ MainLevel:
 
 	; key UST - pause
 	tst	KeyUst
+	beq	20$
+	clr	KeyUst
+10$:	tst	KeyUst
 	beq	10$
 	clr	KeyUst
-	com	Pause
-10$:	tst	Pause
-	beq	20$
 	return
 20$:	; key UST - pause
 
@@ -3299,7 +3300,6 @@ MenuSound:
 CurrentVaddr1:	.word	0
 CurrentVaddr2:	.word	0
 
-Pause:		.word	0
 CurrentMode:	.word	0
 FrameCount:	.word	0
 Palette:	.word	0			; default must be GRB
