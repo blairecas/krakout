@@ -17,8 +17,8 @@ PPMain:	; clean upper PPU RAM (with screen plane 0)
 	; timers
 	bic	#^B0000001000000000, @#177054	; disable vsync in PPU
 	bis	#^B0000000100000000, @#177054	; enable vsync in CPU
+	bic	#^B0001111110000000, @#177716	; sound init (mixer off)
 	call	TimerInit			; init pp timer
-	bic	#200, @#177716			; turn off sound generator
 
 	; keyboard
 	mov	#KeyboardInt,  @#300
@@ -823,7 +823,6 @@ PlaySound:
 	mov	R0, SoundAddr
 	mov	R1, @#177712			; load counter
 	tst	@#177714
-	tst	@#177714
 	bic	#200, @#177716			; sound to LO
 	mov	#SoundIntHi, @#304		; set sound interrupt to HI
 	mov	#^B01000001, @#177710		; allow int, start, timer = 4 mks
@@ -845,10 +844,8 @@ SoundIntNext:
 	beq	90$				; end of sound?
 	add	#2, SoundAddr
 	tst	@#177714
-	tst	@#177714
 	rti
 90$:	clr	@#177710			; stop timer and ints
-	tst	@#177714
 	tst	@#177714
 	rti
 

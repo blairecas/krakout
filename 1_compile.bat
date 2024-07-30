@@ -48,4 +48,7 @@ php -f ../scripts/lst2bin.php _bmain.lst ./release/krk.sav sav
 ..\scripts\rt11dsk.exe d main.dsk .\release\krk.sav >NUL
 ..\scripts\rt11dsk.exe a main.dsk .\release\krk.sav >NUL
 
+..\scripts\rt11dsk.exe d ..\..\03_dsk\hdd.dsk .\release\krk.sav >NUL
+..\scripts\rt11dsk.exe a ..\..\03_dsk\hdd.dsk .\release\krk.sav >NUL
+
 echo.
