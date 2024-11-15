@@ -43,7 +43,7 @@ PPARR:	.byte	0				; return value (0 - OK)
 PPCMD:	.byte	0				; command
 	.word	32				; device type (32 - PPU mem)
 PPAPP:	.word	0				; address for PPU
-PPACP:	.word	0				; address for CPU
+PPACP:	.word	0				; address for CPU (length for allocate)
 PPLEN:	.word	0				; length in words
 
 ; send command to PPU with exch array
@@ -60,12 +60,11 @@ PPSen:	mov	#PPMSG, R0			; array address
 ; R4 - start addr in CPU
 ; R5 - length / 2
 PPRun:	movb	#1, PPCMD			; 1 - allocate memory
-	mov	R5, PPLEN
-	call	PPSEN			
-	; (!) warn - no testing for success (!)
+	mov	R5, PPACP
+	call	PPSEN				; (!) warn - no testing for success (!)
 	movb	#20, PPCMD			; 20 - write to PPU mem
-	mov	R5, PPLEN
 	mov 	R4, PPACP
+	mov	R5, PPLEN
 	call	PPSEN
 	movb	#30, PPCMD			; 30 - run
 	call	PPSEN

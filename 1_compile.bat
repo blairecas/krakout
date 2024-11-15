@@ -45,10 +45,23 @@ if %ERRORLEVEL% NEQ 0 ( exit /b )
 if %ERRORLEVEL% NEQ 0 ( exit /b )
 php -f ../scripts/lst2bin.php _bmain.lst ./release/krk.sav sav
 
-..\scripts\rt11dsk.exe d main.dsk .\release\krk.sav >NUL
-..\scripts\rt11dsk.exe a main.dsk .\release\krk.sav >NUL
+..\scripts\rt11dsk.exe d krkout.dsk .\release\krk.sav >NUL
+..\scripts\rt11dsk.exe a krkout.dsk .\release\krk.sav >NUL
 
 ..\scripts\rt11dsk.exe d ..\..\03_dsk\hdd.dsk .\release\krk.sav >NUL
 ..\scripts\rt11dsk.exe a ..\..\03_dsk\hdd.dsk .\release\krk.sav >NUL
+
+del _acpu.lst
+del _appu.lst
+del _bmain.lst
+del _acpu.mac
+del _appu.mac
+del _bmain.mac
+del _acpu_lz.bin
+del _acpu.bin
+del _appu_lz.bin
+del _appu.bin
+
+@2_run_ukncbtl.bat
 
 echo.
