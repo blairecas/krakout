@@ -52,7 +52,7 @@ php -f ../scripts/lst2bin.php _bmain.lst ./release/krk.sav sav
 ..\scripts\rt11dsk.exe a ..\..\03_dsk\hdd.dsk .\release\krk.sav >NUL
 
 del _acpu.lst
-del _appu.lst
+rem del _appu.lst
 del _bmain.lst
 del _acpu.mac
 del _appu.mac

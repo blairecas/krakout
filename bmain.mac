@@ -67,8 +67,7 @@ PPRun:	movb	#1, PPCMD			; 1 - allocate memory
 	mov	R5, PPLEN
 	call	PPSEN
 	movb	#30, PPCMD			; 30 - run
-	call	PPSEN
-	return 
+	br	PPSEN
 
 
 ; //////////////////////////////////////////////////////////////////////////////
@@ -81,7 +80,7 @@ PpuLoaderStart:
 	mtps	#200
 	clr	R0
 	call	@7132(R0)			; stop FD
-	mov	#361, @#177054			; set ROM banks as VRAM
+	mov	#^B1111110001, @#177054		; timers off, set 100000+ as RAM
 	; relocate code to the top of RAM and run
 	mov	PC, R0
 	add	#PpuLoaderUnp-., R0

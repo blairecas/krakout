@@ -15,14 +15,17 @@ PPMain:	; clean upper PPU RAM (with screen plane 0)
 	sob	R3, .-2
 
 	; timers
-	bic	#^B0000001000000000, @#177054	; disable vsync in PPU
-	bis	#^B0000000100000000, @#177054	; enable vsync in CPU
+	bic	#^B0000001000000000, @#177054	; enable vsync in CPU
+	bic	#^B0000000100000000, @#177054	; enable vsync in PPU
 	bic	#^B0001111110000000, @#177716	; sound init (mixer off)
 	call	TimerInit			; init pp timer
 
 	; keyboard
 	mov	#KeyboardInt,  @#300
 	bis	#100, @#177700			; allow keyboard interrupts
+
+	; vsync (used for mouse)
+	mov	#VsyInt, @#100
 
         ; set 'PPU is ready'
 	mov	#PpuComm/2, @#177010
@@ -39,7 +42,6 @@ PPMain:	; clean upper PPU RAM (with screen plane 0)
 
 MainCycle:
 	call	CmdProcess
-	call	MouseProc
 	br	MainCycle
 
 
@@ -98,13 +100,102 @@ CommandsTable:
 ; // Utils
 ; //////////////////////////////////////////////////////////////////////////////
 
-; TODO: something with error
-Error:	mtps	#200
+VsyInt:	mov	R0, -(SP)
+	mov	R1, -(SP)
+	mov	R2, -(SP)
+	mov	R3, -(SP)
+	mov	@#177010, -(SP)
+	call	MouseProc
+	mov	(SP)+, @#177010
+	mov	(SP)+, R3
+	mov	(SP)+, R2
+	mov	(SP)+, R1
+	mov	(SP)+, R0
+	rti
+
+RtiAdr:	rti
+RtiAd4:	bis	#20, @#177716
+	bis	#40, @#177716
+	mov	#^B1100000001, @#177054
+	mov	(SP), R0
+	mov	#MsgTs1, R2
+	call	PpuPutOctal
+	mov	2(SP), R0
+	mov	#MsgTs2, R2
+	call	PpuPutOctal
+	mov	#MsgTs1, R0
+	mov	#100000, R1
+	call	PpuPriStr
+	mov	#MsgTs2, R0
+	mov	#12.*C_SCRWID+100000, R1
+	call	PpuPriStr
 	br	.
 
+MsgTs1:	.asciz	"000000"
+MsgTs2:	.asciz	"000000"
+	.even
 
-; empty interrupt
-RtiAdr:	rti
+C_FONT_ADDR	= 117430
+C_FONT_DY	= 11.
+
+; 117430 - addr of 0x00 character in ROM, font is 11. bytes per character, KOI8R
+; R0 - string addr, R1 - vaddr/2
+PpuPriStr:
+	mov	R2, -(SP)
+	mov	R4, -(SP)
+	mov	R5, -(SP)
+	mov	#177010, R4
+	mov	#177014, R5
+	mov	R1, (R4)
+	mov	#C_SCRWID, R2
+10$:	movb	(R0)+, R1
+	beq	20$
+	bic	#^B1111111100000000, R1
+	mul	#C_FONT_DY, R1
+	add	#C_FONT_ADDR, R1
+	.rept	C_FONT_DY
+	movb	(R1)+, (R5)
+	add	R2, (R4)
+	.endr
+	sub	#C_FONT_DY*C_SCRWID-1, (R4)
+	br	10$
+20$:	mov	(R4), R1
+	mov	(SP)+, R5
+	mov	(SP)+, R4
+	mov	(SP)+, R2
+	return
+
+; put octal number in R0 to (R2)+
+PpuPutOctal:
+	mov	#6, R3
+	clr	R1
+	br	20$
+10$:	clr	R1
+	rol	R0
+	rol	R1
+	rol	R0
+	rol	R1
+20$:	rol	R0
+	rol	R1
+	add	#'0, R1
+	movb	R1, (R2)+
+	sob	R3, 10$
+	return
+
+; TODO: something with error
+Error:	mtps	#200
+	; stop CPU (just in case)
+	bis	#20, @#177716
+	bis	#40, @#177716
+	; TODO: something better for debug
+	call	SetVreg
+10$:	mov	#C_VBUF1, (R4)
+	mov	#100000, R3
+	mov	#177777, R2
+20$:	xor	R2, (R5)
+	inc	(R4)
+	sob	R3, 20$
+	br	10$
 
 
 ; set registers for vaddr
