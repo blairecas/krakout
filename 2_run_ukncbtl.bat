@@ -1,1 +1,1 @@
-start ..\..\ukncbtl\ukncbtl /autostart /disk0:C:\Projects\uknc\00_code\krakout\krkout.dsk /boot1
+start ..\..\ukncbtl\ukncbtl /autostart /disk0:..\krakout\release\krkout.dsk /boot1
