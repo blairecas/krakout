@@ -436,6 +436,8 @@ MouseProc:
 	tst	PpuNoMouse
 	bne	99$
 	mov	@#177400, R0
+	cmp	R0, #^B1000000110000001		; mouse 'says' no data
+	beq	99$				; so - just ignore that value
 	; [YYYYYYYLXXXXXXXR] signed 7-bit
 	mov	PpuMouseBtn, R3			; R3 - old left button
 	clr	R2				; R2 - left button

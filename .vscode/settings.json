@@ -11,6 +11,7 @@
         "editor.insertSpaces": false,
         "editor.codeLens": false,
 	"editor.detectIndentation": false,
+	"editor.colorDecorators": false,
 	"explorer.sortOrder": "type",
 	"editor.wordBasedSuggestions": "off",
 	"files.autoGuessEncoding": false,
