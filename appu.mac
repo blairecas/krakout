@@ -451,6 +451,7 @@ MouseProc:
 	movb	R0, R1
 	asr	R1
 	rol	R2
+	asr	R1				; reduce mouse dY 
 	sub	R1, PpuMouseY			; Y is inverted
 	mov	R2, PpuMouseBtn
 	; check Y for out of screen
